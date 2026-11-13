@@ -84,4 +84,70 @@ class ExampleRobolectricTest {
         assertTrue("Target should be destroyed", engine.target.isDestroyed)
         assertEquals(GameStatus.WON, engine.gameStatus)
     }
+
+    @Test
+    fun `test 2_5x scaled gun and bomb target dimensions`() {
+        val engine = GameEngine(levelNumber = 1)
+        // Use ~1080p-width arena so computeArenaScale() is ~1.0f
+        engine.initializeArena(1150f, 1600f)
+
+        assertTrue("Gun width should be scaled ~2.5x (>= 250f)", engine.playerGun.width >= 250f)
+        assertTrue("Gun height should be scaled ~2.5x (>= 160f)", engine.playerGun.height >= 160f)
+        assertTrue("Bomb target radius should be scaled ~2.5x (>= 80f)", engine.target.radius >= 80f)
+    }
+
+    @Test
+    fun `test switching gun types changes projectile count and physics stats`() {
+        val engine = GameEngine(levelNumber = 1)
+        engine.initializeArena(1150f, 1600f)
+
+        engine.setGunType(com.example.game.engine.GunType.SCATTER_SHOTGUN)
+        assertEquals(com.example.game.engine.GunType.SCATTER_SHOTGUN, engine.currentGunType)
+
+        engine.tapToShoot()
+        assertEquals("Scatter shotgun should fire 3 pellets", 3, engine.bullets.size)
+        val initialSpin = kotlin.math.abs(engine.playerGun.angularVelocity)
+        assertTrue("Gun should receive realistic angular kick", initialSpin > 0.5f)
+
+        // Advance physics and confirm quadratic aerodynamic damping slows rotation smoothly
+        for (i in 0 until 45) {
+            engine.update(0.016f)
+        }
+        val decayedSpin = kotlin.math.abs(engine.playerGun.angularVelocity)
+        assertTrue("Rotation should decay smoothly over time due to aerodynamic damping", decayedSpin < initialSpin)
+    }
+
+    @Test
+    fun `test sound events emit on shot and target explosion`() {
+        val events = mutableListOf<com.example.game.audio.GameSoundEvent>()
+        val engine = GameEngine(levelNumber = 1).apply {
+            onSoundEvent = { events.add(it) }
+        }
+        engine.initializeArena(1150f, 1600f)
+
+        engine.tapToShoot()
+        assertTrue(events.contains(com.example.game.audio.GameSoundEvent.SHOT_PULSE))
+
+        engine.target.x = 500f
+        engine.target.y = 500f
+        val bullet = engine.bullets.first()
+        bullet.x = 500f
+        bullet.y = 500f
+        engine.update(0.016f)
+
+        assertTrue(events.contains(com.example.game.audio.GameSoundEvent.TARGET_EXPLOSION))
+        assertTrue(events.contains(com.example.game.audio.GameSoundEvent.LEVEL_WON))
+
+        val shotEvents = com.example.game.engine.GunType.entries
+            .map { com.example.game.audio.GameSoundEvent.forGun(it) }
+            .toSet()
+        assertEquals("Every gun should have a distinct sound event", com.example.game.engine.GunType.entries.size, shotEvents.size)
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val soundManager = com.example.game.audio.SoundEffectsManager(context)
+        soundManager.play(com.example.game.audio.GameSoundEvent.SHOT_RAILGUN)
+        soundManager.isMuted = true
+        soundManager.play(com.example.game.audio.GameSoundEvent.UI_CLICK)
+        soundManager.release()
+    }
 }

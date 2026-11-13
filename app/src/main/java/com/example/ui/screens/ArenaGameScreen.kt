@@ -1,28 +1,52 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -30,11 +54,16 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -43,7 +72,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
@@ -52,22 +80,37 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.CampaignStage
 import com.example.game.engine.DebrisFragment
 import com.example.game.engine.GameEngine
 import com.example.game.engine.GameStatus
 import com.example.game.engine.GunEntity
+import com.example.game.engine.GunType
 import com.example.game.engine.Particle
 import com.example.game.engine.PlatformObstacle
 import com.example.game.engine.RicochetBullet
 import com.example.game.engine.TargetEntity
+import kotlin.math.sin
 
 @Composable
 fun ArenaGameScreen(
     engine: GameEngine?,
     gameTick: Long,
+    selectedGunType: GunType = GunType.PULSE_PISTOL,
+    isPaused: Boolean = false,
+    isLevelsMenuOpen: Boolean = false,
+    isSoundEnabled: Boolean = true,
+    campaignStages: List<CampaignStage> = emptyList(),
     onInitArena: (Float, Float) -> Unit = { _, _ -> },
     onInitArenaBounds: (Float, Float, Float, Float) -> Unit = { _, _, _, _ -> },
     onTapScreen: () -> Unit,
+    onSelectGun: (GunType) -> Unit = {},
+    onPauseGame: () -> Unit = {},
+    onResumeGame: () -> Unit = {},
+    onOpenLevelsMenu: () -> Unit = {},
+    onCloseLevelsMenu: () -> Unit = {},
+    onSelectLevel: (Int) -> Unit = {},
+    onToggleSound: () -> Unit = {},
     onRestartLevel: () -> Unit,
     onNextLevel: () -> Unit,
     onExitArena: () -> Unit
@@ -84,6 +127,14 @@ fun ArenaGameScreen(
         return
     }
 
+    BackHandler(enabled = isLevelsMenuOpen || isPaused || engine.gameStatus == GameStatus.PLAYING) {
+        when {
+            isLevelsMenuOpen -> onCloseLevelsMenu()
+            isPaused -> onResumeGame()
+            engine.gameStatus == GameStatus.PLAYING -> onPauseGame()
+        }
+    }
+
     val density = LocalDensity.current
 
     BoxWithConstraints(
@@ -94,13 +145,13 @@ fun ArenaGameScreen(
         val screenW = constraints.maxWidth.toFloat()
         val screenH = constraints.maxHeight.toFloat()
 
-        // Calculate focused, centered arena playfield (Close-up viewpoint matching reference)
+        // Calculate focused, centered arena playfield leaving room for header & bottom gun arsenal bar
         val paddingH = with(density) { 16.dp.toPx() }
-        val headerH = with(density) { 72.dp.toPx() }
-        val bottomPadding = with(density) { 24.dp.toPx() }
+        val headerH = with(density) { 68.dp.toPx() }
+        val bottomBarH = with(density) { 92.dp.toPx() }
 
         val availableW = (screenW - paddingH * 2).coerceAtLeast(200f)
-        val availableH = (screenH - headerH - bottomPadding).coerceAtLeast(300f)
+        val availableH = (screenH - headerH - bottomBarH).coerceAtLeast(300f)
 
         // Focused close-up arena aspect ratio (~1:1.45)
         val arenaW = availableW.coerceAtMost(with(density) { 480.dp.toPx() })
@@ -123,10 +174,10 @@ fun ArenaGameScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("game_canvas")
-                .pointerInput(engine) {
+                .pointerInput(engine, isPaused, isLevelsMenuOpen) {
                     detectTapGestures(
                         onTap = {
-                            if (engine.gameStatus == GameStatus.PLAYING) {
+                            if (!isPaused && !isLevelsMenuOpen && engine.gameStatus == GameStatus.PLAYING) {
                                 onTapScreen()
                             }
                         }
@@ -178,46 +229,90 @@ fun ArenaGameScreen(
             }
         }
 
-        // Minimal Header Bar (Level Indicator, Restart Button, Sound Toggle)
+        // Top Header Bar (Levels Pill, Restart, Sound Toggle, Pause)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 20.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "Level ${engine.levelNumber}",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Black,
-                color = Color(0xFFF1F5F9),
-                modifier = Modifier.testTag("level_indicator")
-            )
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = Color(0xFF151922),
+                border = BorderStroke(1.dp, Color(0xFF334155)),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { onOpenLevelsMenu() }
+                    .testTag("levels_menu_button")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.GridView,
+                        contentDescription = "Open Levels Menu",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Level ${engine.levelNumber}",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFFF1F5F9),
+                        modifier = Modifier.testTag("level_indicator")
+                    )
+                }
+            }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 IconButton(
                     onClick = { onRestartLevel() },
-                    modifier = Modifier.testTag("reset_level_button")
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("reset_level_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = "Restart Level",
                         tint = Color(0xFFCBD5E1),
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
                 IconButton(
-                    onClick = { /* Sound toggle */ },
-                    modifier = Modifier.testTag("sound_toggle_button")
+                    onClick = { onToggleSound() },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("sound_toggle_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.VolumeUp,
-                        contentDescription = "Sound",
-                        tint = Color(0xFFCBD5E1),
-                        modifier = Modifier.size(28.dp)
+                        imageVector = if (isSoundEnabled) {
+                            Icons.AutoMirrored.Filled.VolumeUp
+                        } else {
+                            Icons.AutoMirrored.Filled.VolumeOff
+                        },
+                        contentDescription = if (isSoundEnabled) "Mute Sound" else "Enable Sound",
+                        tint = if (isSoundEnabled) Color(0xFF38BDF8) else Color(0xFF64748B),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                IconButton(
+                    onClick = { if (isPaused) onResumeGame() else onPauseGame() },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("pause_button")
+                ) {
+                    Icon(
+                        imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = if (isPaused) "Resume Game" else "Pause Game",
+                        tint = Color(0xFFF1F5F9),
+                        modifier = Modifier.size(26.dp)
                     )
                 }
             }
@@ -228,16 +323,76 @@ fun ArenaGameScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 40.dp),
+                    .padding(bottom = 104.dp),
                 contentAlignment = Alignment.BottomCenter
             ) {
                 Text(
-                    text = "TAP ANYWHERE TO SHOOT",
-                    fontSize = 13.sp,
+                    text = "TAP ARENA TO SHOOT • ${selectedGunType.tagline.uppercase()}",
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 2.sp,
+                    letterSpacing = 1.4.sp,
                     color = Color(0xB3FFFFFF)
                 )
+            }
+        }
+
+        // Bottom Weapon Arsenal Selector Strip (Outside Arena Canvas)
+        LazyRow(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("gun_selector_row"),
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            items(GunType.entries) { gunType ->
+                val isSelected = gunType == selectedGunType
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSelected) gunType.primaryColor.copy(alpha = 0.22f) else Color(0xFF151922),
+                    border = BorderStroke(
+                        width = if (isSelected) 2.dp else 1.dp,
+                        color = if (isSelected) gunType.primaryColor else Color(0xFF334155)
+                    ),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onSelectGun(gunType) }
+                        .testTag("gun_chip_${gunType.name.lowercase()}")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(gunType.primaryColor)
+                        )
+                        Column {
+                            Text(
+                                text = gunType.displayName,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) Color.White else Color(0xFFCBD5E1)
+                            )
+                            Text(
+                                text = if (gunType.pelletsPerShot > 1) {
+                                    "${gunType.pelletsPerShot}x • ${gunType.maxBounces} Bnc"
+                                } else {
+                                    "${gunType.maxBounces} Bnc • ${(gunType.bulletSpeed / 100f).toInt()}x Spd"
+                                },
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (isSelected) gunType.accentColor else Color(0xFF94A3B8)
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -325,6 +480,24 @@ fun ArenaGameScreen(
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    TextButton(
+                        onClick = { onOpenLevelsMenu() },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("win_levels_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GridView,
+                            contentDescription = null,
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("LEVELS MENU", color = Color(0xFF94A3B8), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
                 }
             }
         }
@@ -380,6 +553,423 @@ fun ArenaGameScreen(
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         Text("RESTART LEVEL", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    TextButton(
+                        onClick = { onOpenLevelsMenu() },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("lose_levels_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.GridView,
+                            contentDescription = null,
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("LEVELS MENU", color = Color(0xFF94A3B8), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        // Pause Mode Overlay with Full Weapon Selection
+        AnimatedVisibility(
+            visible = isPaused && !isLevelsMenuOpen && engine.gameStatus == GameStatus.PLAYING,
+            enter = fadeIn() + scaleIn(initialScale = 0.92f),
+            exit = fadeOut() + scaleOut(targetScale = 0.92f),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xB8090D16))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { /* Block arena taps while paused */ },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFA121722)),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 20.dp),
+                    modifier = Modifier
+                        .padding(20.dp)
+                        .fillMaxWidth()
+                        .widthIn(max = 420.dp)
+                        .testTag("pause_dialog")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "PAUSED",
+                                    fontSize = 26.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = Color(0xFFF8FAFC)
+                                )
+                                Text(
+                                    text = "Level ${engine.levelNumber} • ${engine.shotsFiredCount} shots",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF1E293B),
+                                border = BorderStroke(1.dp, Color(0xFF334155)),
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { onToggleSound() }
+                                    .testTag("pause_sound_toggle")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isSoundEnabled) {
+                                            Icons.AutoMirrored.Filled.VolumeUp
+                                        } else {
+                                            Icons.AutoMirrored.Filled.VolumeOff
+                                        },
+                                        contentDescription = if (isSoundEnabled) "Sound On" else "Sound Off",
+                                        tint = if (isSoundEnabled) Color(0xFF38BDF8) else Color(0xFF64748B),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Text(
+                                        text = if (isSoundEnabled) "SFX ON" else "MUTED",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSoundEnabled) Color(0xFF38BDF8) else Color(0xFF94A3B8)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Text(
+                            text = "SELECT WEAPON",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 1.5.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 260.dp)
+                                .testTag("pause_gun_list"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(GunType.entries) { gunType ->
+                                val isSelected = gunType == selectedGunType
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = if (isSelected) {
+                                        gunType.primaryColor.copy(alpha = 0.20f)
+                                    } else {
+                                        Color(0xFF1A202E)
+                                    },
+                                    border = BorderStroke(
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) gunType.primaryColor else Color(0xFF2A3447)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .minimumInteractiveComponentSize()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { onSelectGun(gunType) }
+                                        .testTag("pause_gun_option_${gunType.name.lowercase()}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(12.dp)
+                                                    .clip(CircleShape)
+                                                    .background(gunType.primaryColor)
+                                            )
+                                            Column {
+                                                Text(
+                                                    text = gunType.displayName,
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White
+                                                )
+                                                Text(
+                                                    text = "${gunType.tagline} • ${gunType.maxBounces} Bounces • Mass ${gunType.mass}",
+                                                    fontSize = 11.sp,
+                                                    color = if (isSelected) gunType.accentColor else Color(0xFF94A3B8)
+                                                )
+                                            }
+                                        }
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Equipped",
+                                                tint = gunType.accentColor,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        Button(
+                            onClick = { onResumeGame() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("resume_button"),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00A2FF)),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("RESUME", color = Color.White, fontWeight = FontWeight.Black)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { onOpenLevelsMenu() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("pause_levels_button"),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, Color(0xFF38BDF8))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.GridView,
+                                    contentDescription = null,
+                                    tint = Color(0xFF38BDF8),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("LEVELS", color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                            }
+
+                            OutlinedButton(
+                                onClick = { onRestartLevel() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("pause_restart_button"),
+                                shape = RoundedCornerShape(14.dp),
+                                border = BorderStroke(1.dp, Color(0xFF94A3B8))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    tint = Color(0xFFE2E8F0),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("RESTART", color = Color(0xFFE2E8F0), fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Levels Menu Grid Overlay
+        AnimatedVisibility(
+            visible = isLevelsMenuOpen,
+            enter = fadeIn() + scaleIn(initialScale = 0.92f),
+            exit = fadeOut() + scaleOut(targetScale = 0.92f),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            val totalLevels = maxOf(20, engine.levelNumber + 2)
+            val stageStarsMap = remember(campaignStages) {
+                campaignStages.associate { it.levelNumber to it.stars }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xC8090D16))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { /* Block arena taps while levels menu is open */ },
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFA121722)),
+                    border = BorderStroke(1.dp, Color(0xFF334155)),
+                    shape = RoundedCornerShape(24.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 20.dp),
+                    modifier = Modifier
+                        .padding(20.dp)
+                        .fillMaxWidth()
+                        .widthIn(max = 440.dp)
+                        .testTag("levels_menu_dialog")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "LEVELS",
+                                    fontSize = 24.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = Color(0xFFF8FAFC)
+                                )
+                                Text(
+                                    text = "1–5 Range Trials • 6+ Procedural Arenas",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { onCloseLevelsMenu() },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("close_levels_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close Levels Menu",
+                                    tint = Color(0xFFCBD5E1)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(4),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp)
+                                .testTag("levels_grid"),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items((1..totalLevels).toList()) { lvl ->
+                                val isCurrent = lvl == engine.levelNumber
+                                val stars = stageStarsMap[lvl] ?: 0
+                                val tag = when (lvl) {
+                                    1 -> "Close"
+                                    2 -> "Short"
+                                    3 -> "Mid"
+                                    4 -> "Long"
+                                    5 -> "Max"
+                                    else -> "Proc"
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = when {
+                                        isCurrent -> Color(0xFF00A2FF).copy(alpha = 0.24f)
+                                        stars > 0 -> Color(0xFF10B981).copy(alpha = 0.14f)
+                                        else -> Color(0xFF1A202E)
+                                    },
+                                    border = BorderStroke(
+                                        width = if (isCurrent) 2.dp else 1.dp,
+                                        color = when {
+                                            isCurrent -> Color(0xFF38BDF8)
+                                            stars > 0 -> Color(0xFF10B981)
+                                            else -> Color(0xFF2E384B)
+                                        }
+                                    ),
+                                    modifier = Modifier
+                                        .aspectRatio(1f)
+                                        .minimumInteractiveComponentSize()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { onSelectLevel(lvl) }
+                                        .testTag("level_tile_$lvl")
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(4.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            text = "$lvl",
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = if (isCurrent) Color(0xFF38BDF8) else Color.White
+                                        )
+                                        Text(
+                                            text = tag,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFF94A3B8)
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                                            (1..3).forEach { s ->
+                                                Icon(
+                                                    imageVector = if (s <= stars) {
+                                                        Icons.Default.Star
+                                                    } else {
+                                                        Icons.Default.StarBorder
+                                                    },
+                                                    contentDescription = null,
+                                                    tint = if (s <= stars) Color(0xFFFFD600) else Color(0xFF475569),
+                                                    modifier = Modifier.size(10.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -443,6 +1033,7 @@ private fun DrawScope.drawPlatform(plat: PlatformObstacle) {
 
 private fun DrawScope.drawPlayerGun(gun: GunEntity) {
     val angleDeg = Math.toDegrees(gun.angle.toDouble()).toFloat()
+    val blowback = (gun.recoilKickTimer / 0.14f).coerceIn(0f, 1f) * (gun.width * 0.055f)
 
     rotate(degrees = angleDeg, pivot = Offset(gun.x, gun.y)) {
         val w = gun.width
@@ -450,134 +1041,418 @@ private fun DrawScope.drawPlayerGun(gun: GunEntity) {
         val left = gun.x - w * 0.5f
         val top = gun.y - h * 0.5f
 
-        // 1. Pistol Grip / Handle (Dark blue angled grip)
-        val gripPath = Path().apply {
-            moveTo(left + w * 0.18f, top + h * 0.48f)
-            lineTo(left + w * 0.44f, top + h * 0.48f)
-            lineTo(left + w * 0.35f, top + h * 0.98f)
-            lineTo(left + w * 0.08f, top + h * 0.98f)
-            close()
+        when (gun.gunType) {
+            GunType.PULSE_PISTOL -> drawPistolSilhouette(gun, left, top, w, h, blowback)
+            GunType.HEAVY_DEAGLE -> drawMagnumSilhouette(gun, left, top, w, h, blowback)
+            GunType.SCATTER_SHOTGUN -> drawShotgunSilhouette(gun, left, top, w, h, blowback)
+            GunType.VECTOR_SMG -> drawSmgSilhouette(gun, left, top, w, h, blowback)
+            GunType.RAIL_CANNON -> drawRailgunSilhouette(gun, left, top, w, h, blowback)
         }
-        drawPath(path = gripPath, color = gun.darkColor)
+    }
+}
 
-        // 2. Grip Texture Grooves
-        drawLine(
-            color = Color(0x33000000),
-            start = Offset(left + w * 0.15f, top + h * 0.65f),
-            end = Offset(left + w * 0.36f, top + h * 0.65f),
-            strokeWidth = 2.dp.toPx()
-        )
-        drawLine(
-            color = Color(0x33000000),
-            start = Offset(left + w * 0.13f, top + h * 0.78f),
-            end = Offset(left + w * 0.33f, top + h * 0.78f),
-            strokeWidth = 2.dp.toPx()
-        )
+private fun DrawScope.drawPistolSilhouette(
+    gun: GunEntity,
+    left: Float,
+    top: Float,
+    w: Float,
+    h: Float,
+    blowback: Float
+) {
+    // 1. Pistol Grip / Handle
+    val gripPath = Path().apply {
+        moveTo(left + w * 0.18f, top + h * 0.46f)
+        lineTo(left + w * 0.44f, top + h * 0.46f)
+        lineTo(left + w * 0.34f, top + h * 0.98f)
+        lineTo(left + w * 0.08f, top + h * 0.98f)
+        close()
+    }
+    drawPath(path = gripPath, color = gun.darkColor)
 
-        // 3. Trigger Guard
-        val triggerGuardPath = Path().apply {
-            moveTo(left + w * 0.38f, top + h * 0.50f)
-            lineTo(left + w * 0.56f, top + h * 0.50f)
-            lineTo(left + w * 0.50f, top + h * 0.72f)
-            lineTo(left + w * 0.38f, top + h * 0.72f)
-        }
-        drawPath(
-            path = triggerGuardPath,
-            color = Color(0xFF0F172A),
-            style = Stroke(width = 2.5.dp.toPx())
-        )
+    // Grip Grooves
+    drawLine(
+        color = Color(0x44000000),
+        start = Offset(left + w * 0.14f, top + h * 0.65f),
+        end = Offset(left + w * 0.36f, top + h * 0.65f),
+        strokeWidth = (h * 0.03f).coerceAtLeast(3f)
+    )
+    drawLine(
+        color = Color(0x44000000),
+        start = Offset(left + w * 0.12f, top + h * 0.79f),
+        end = Offset(left + w * 0.34f, top + h * 0.79f),
+        strokeWidth = (h * 0.03f).coerceAtLeast(3f)
+    )
 
-        // 4. Trigger
-        drawLine(
-            color = Color(0xFFE2E8F0),
-            start = Offset(left + w * 0.42f, top + h * 0.52f),
-            end = Offset(left + w * 0.40f, top + h * 0.64f),
-            strokeWidth = 2.dp.toPx()
-        )
+    // Trigger Guard & Trigger
+    val triggerGuardPath = Path().apply {
+        moveTo(left + w * 0.38f, top + h * 0.48f)
+        lineTo(left + w * 0.56f, top + h * 0.48f)
+        lineTo(left + w * 0.50f, top + h * 0.72f)
+        lineTo(left + w * 0.38f, top + h * 0.72f)
+    }
+    drawPath(
+        path = triggerGuardPath,
+        color = Color(0xFF0F172A),
+        style = Stroke(width = (h * 0.035f).coerceAtLeast(4f))
+    )
+    drawLine(
+        color = Color(0xFFE2E8F0),
+        start = Offset(left + w * 0.43f, top + h * 0.50f),
+        end = Offset(left + w * 0.40f, top + h * 0.64f),
+        strokeWidth = (h * 0.028f).coerceAtLeast(3f)
+    )
 
-        // 5. Main Gun Slide & Barrel Receiver (Vibrant Blue Body)
+    // Lower Frame Receiver
+    drawRoundRect(
+        color = gun.darkColor,
+        topLeft = Offset(left + w * 0.08f, top + h * 0.36f),
+        size = Size(w * 0.74f, h * 0.14f),
+        cornerRadius = CornerRadius(8f, 8f)
+    )
+
+    // Recoiling Upper Slide & Barrel
+    val slideLeft = left - blowback
+    drawRoundRect(
+        color = gun.color,
+        topLeft = Offset(slideLeft, top + h * 0.11f),
+        size = Size(w * 0.86f, h * 0.30f),
+        cornerRadius = CornerRadius(10f, 10f)
+    )
+    drawRect(
+        color = gun.color,
+        topLeft = Offset(slideLeft + w * 0.86f, top + h * 0.15f),
+        size = Size(w * 0.14f, h * 0.22f)
+    )
+    drawLine(
+        color = gun.accentColor,
+        start = Offset(slideLeft + w * 0.08f, top + h * 0.15f),
+        end = Offset(slideLeft + w * 0.84f, top + h * 0.15f),
+        strokeWidth = (h * 0.03f).coerceAtLeast(4f)
+    )
+    drawRect(
+        color = gun.accentColor,
+        topLeft = Offset(slideLeft + w * 0.82f, top + h * 0.05f),
+        size = Size(w * 0.045f, h * 0.07f)
+    )
+}
+
+private fun DrawScope.drawMagnumSilhouette(
+    gun: GunEntity,
+    left: Float,
+    top: Float,
+    w: Float,
+    h: Float,
+    blowback: Float
+) {
+    // Heavy Angled Grip
+    val gripPath = Path().apply {
+        moveTo(left + w * 0.14f, top + h * 0.48f)
+        lineTo(left + w * 0.38f, top + h * 0.48f)
+        lineTo(left + w * 0.29f, top + h * 0.98f)
+        lineTo(left + w * 0.04f, top + h * 0.98f)
+        close()
+    }
+    drawPath(path = gripPath, color = gun.darkColor)
+
+    // Heavy Trigger Guard
+    val guardPath = Path().apply {
+        moveTo(left + w * 0.34f, top + h * 0.50f)
+        lineTo(left + w * 0.52f, top + h * 0.50f)
+        lineTo(left + w * 0.47f, top + h * 0.75f)
+        lineTo(left + w * 0.34f, top + h * 0.75f)
+    }
+    drawPath(path = guardPath, color = Color(0xFF1E293B), style = Stroke(width = (h * 0.04f).coerceAtLeast(5f)))
+
+    // Massive Underbarrel Frame
+    drawRoundRect(
+        color = gun.darkColor,
+        topLeft = Offset(left + w * 0.08f, top + h * 0.34f),
+        size = Size(w * 0.86f, h * 0.18f),
+        cornerRadius = CornerRadius(10f, 10f)
+    )
+
+    // Long Heavy Ribbed Slide
+    val slideLeft = left - blowback
+    drawRoundRect(
+        color = gun.color,
+        topLeft = Offset(slideLeft + w * 0.02f, top + h * 0.08f),
+        size = Size(w * 0.94f, h * 0.28f),
+        cornerRadius = CornerRadius(8f, 8f)
+    )
+    // Ventilated Barrel Ports
+    for (i in 0..3) {
         drawRoundRect(
-            color = gun.color,
-            topLeft = Offset(left, top + h * 0.12f),
-            size = Size(w * 0.86f, h * 0.38f),
-            cornerRadius = CornerRadius(5f, 5f)
-        )
-
-        // 6. Front Muzzle Extension
-        drawRect(
-            color = gun.color,
-            topLeft = Offset(left + w * 0.86f, top + h * 0.18f),
-            size = Size(w * 0.14f, h * 0.26f)
-        )
-
-        // 7. Slide Top Highlight & Front Sight
-        drawLine(
-            color = gun.accentColor,
-            start = Offset(left + w * 0.08f, top + h * 0.14f),
-            end = Offset(left + w * 0.84f, top + h * 0.14f),
-            strokeWidth = 2.5.dp.toPx()
-        )
-        drawRect(
-            color = gun.accentColor,
-            topLeft = Offset(left + w * 0.82f, top + h * 0.08f),
-            size = Size(6f, 6f)
+            color = Color(0xFF1E293B),
+            topLeft = Offset(slideLeft + w * (0.48f + i * 0.10f), top + h * 0.13f),
+            size = Size(w * 0.055f, h * 0.08f),
+            cornerRadius = CornerRadius(3f, 3f)
         )
     }
+    // Front Sight & Compensator Lip
+    drawRect(
+        color = gun.accentColor,
+        topLeft = Offset(slideLeft + w * 0.90f, top + h * 0.02f),
+        size = Size(w * 0.05f, h * 0.08f)
+    )
+    drawLine(
+        color = gun.accentColor,
+        start = Offset(slideLeft + w * 0.06f, top + h * 0.11f),
+        end = Offset(slideLeft + w * 0.88f, top + h * 0.11f),
+        strokeWidth = (h * 0.028f).coerceAtLeast(3.5f)
+    )
+}
+
+private fun DrawScope.drawShotgunSilhouette(
+    gun: GunEntity,
+    left: Float,
+    top: Float,
+    w: Float,
+    h: Float,
+    blowback: Float
+) {
+    // Angled Shotgun Stock
+    val stockPath = Path().apply {
+        moveTo(left + w * 0.02f, top + h * 0.58f)
+        lineTo(left + w * 0.26f, top + h * 0.42f)
+        lineTo(left + w * 0.34f, top + h * 0.56f)
+        lineTo(left + w * 0.10f, top + h * 0.94f)
+        lineTo(left + w * 0.0f, top + h * 0.84f)
+        close()
+    }
+    drawPath(path = stockPath, color = gun.darkColor)
+
+    // Trigger Guard
+    drawArc(
+        color = Color(0xFF0F172A),
+        startAngle = 0f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(left + w * 0.28f, top + h * 0.44f),
+        size = Size(w * 0.14f, h * 0.24f),
+        style = Stroke(width = (h * 0.035f).coerceAtLeast(4f))
+    )
+
+    // Receiver Body
+    drawRoundRect(
+        color = gun.color,
+        topLeft = Offset(left + w * 0.18f, top + h * 0.24f),
+        size = Size(w * 0.34f, h * 0.28f),
+        cornerRadius = CornerRadius(10f, 10f)
+    )
+
+    // Twin Stacked Heavy Barrels + Pump Forend
+    val barrelLeft = left - blowback * 0.8f
+    drawRoundRect(
+        color = gun.color,
+        topLeft = Offset(barrelLeft + w * 0.44f, top + h * 0.18f),
+        size = Size(w * 0.56f, h * 0.15f),
+        cornerRadius = CornerRadius(6f, 6f)
+    )
+    drawRoundRect(
+        color = Color(0xFF334155),
+        topLeft = Offset(barrelLeft + w * 0.44f, top + h * 0.35f),
+        size = Size(w * 0.50f, h * 0.11f),
+        cornerRadius = CornerRadius(5f, 5f)
+    )
+    // Pump Grip
+    drawRoundRect(
+        color = gun.accentColor,
+        topLeft = Offset(barrelLeft + w * 0.54f, top + h * 0.34f),
+        size = Size(w * 0.24f, h * 0.18f),
+        cornerRadius = CornerRadius(8f, 8f)
+    )
+}
+
+private fun DrawScope.drawSmgSilhouette(
+    gun: GunEntity,
+    left: Float,
+    top: Float,
+    w: Float,
+    h: Float,
+    blowback: Float
+) {
+    // Rear Pistol Grip
+    val gripPath = Path().apply {
+        moveTo(left + w * 0.14f, top + h * 0.46f)
+        lineTo(left + w * 0.34f, top + h * 0.46f)
+        lineTo(left + w * 0.26f, top + h * 0.92f)
+        lineTo(left + w * 0.06f, top + h * 0.92f)
+        close()
+    }
+    drawPath(path = gripPath, color = gun.darkColor)
+
+    // Extended Angled Magazine
+    val magPath = Path().apply {
+        moveTo(left + w * 0.48f, top + h * 0.48f)
+        lineTo(left + w * 0.62f, top + h * 0.48f)
+        lineTo(left + w * 0.54f, top + h * 0.98f)
+        lineTo(left + w * 0.40f, top + h * 0.98f)
+        close()
+    }
+    drawPath(path = magPath, color = Color(0xFF1E293B))
+    drawLine(
+        color = gun.accentColor,
+        start = Offset(left + w * 0.44f, top + h * 0.88f),
+        end = Offset(left + w * 0.52f, top + h * 0.88f),
+        strokeWidth = (h * 0.03f).coerceAtLeast(3.5f)
+    )
+
+    // Compact SMG Receiver
+    val slideLeft = left - blowback * 0.7f
+    drawRoundRect(
+        color = gun.color,
+        topLeft = Offset(slideLeft + w * 0.06f, top + h * 0.18f),
+        size = Size(w * 0.76f, h * 0.34f),
+        cornerRadius = CornerRadius(12f, 12f)
+    )
+
+    // Stubby Shrouded Barrel
+    drawRoundRect(
+        color = gun.darkColor,
+        topLeft = Offset(slideLeft + w * 0.80f, top + h * 0.24f),
+        size = Size(w * 0.20f, h * 0.18f),
+        cornerRadius = CornerRadius(6f, 6f)
+    )
+
+    // Top Optic Rail & Holographic Sight
+    drawRoundRect(
+        color = gun.accentColor,
+        topLeft = Offset(slideLeft + w * 0.24f, top + h * 0.07f),
+        size = Size(w * 0.30f, h * 0.11f),
+        cornerRadius = CornerRadius(6f, 6f)
+    )
+}
+
+private fun DrawScope.drawRailgunSilhouette(
+    gun: GunEntity,
+    left: Float,
+    top: Float,
+    w: Float,
+    h: Float,
+    blowback: Float
+) {
+    // Rear Grip & Core Capacitor
+    val gripPath = Path().apply {
+        moveTo(left + w * 0.14f, top + h * 0.50f)
+        lineTo(left + w * 0.34f, top + h * 0.50f)
+        lineTo(left + w * 0.26f, top + h * 0.96f)
+        lineTo(left + w * 0.06f, top + h * 0.96f)
+        close()
+    }
+    drawPath(path = gripPath, color = gun.darkColor)
+
+    // Main Chassis
+    drawRoundRect(
+        color = gun.darkColor,
+        topLeft = Offset(left + w * 0.04f, top + h * 0.20f),
+        size = Size(w * 0.40f, h * 0.36f),
+        cornerRadius = CornerRadius(12f, 12f)
+    )
+
+    // Twin Magnetic Accelerating Rails
+    val railLeft = left - blowback * 0.6f
+    drawRoundRect(
+        color = gun.color,
+        topLeft = Offset(railLeft + w * 0.38f, top + h * 0.14f),
+        size = Size(w * 0.62f, h * 0.14f),
+        cornerRadius = CornerRadius(6f, 6f)
+    )
+    drawRoundRect(
+        color = gun.color,
+        topLeft = Offset(railLeft + w * 0.38f, top + h * 0.42f),
+        size = Size(w * 0.58f, h * 0.14f),
+        cornerRadius = CornerRadius(6f, 6f)
+    )
+
+    // Glowing Plasma Channel Between Rails
+    drawRoundRect(
+        color = gun.gunType.bulletGlowColor,
+        topLeft = Offset(railLeft + w * 0.36f, top + h * 0.31f),
+        size = Size(w * 0.56f, h * 0.08f),
+        cornerRadius = CornerRadius(4f, 4f)
+    )
+    drawLine(
+        color = Color.White,
+        start = Offset(railLeft + w * 0.38f, top + h * 0.35f),
+        end = Offset(railLeft + w * 0.90f, top + h * 0.35f),
+        strokeWidth = (h * 0.025f).coerceAtLeast(3f)
+    )
 }
 
 private fun DrawScope.drawTarget(target: TargetEntity) {
     val x = target.x
     val y = target.y
     val r = target.radius
+    val pulse = (sin(target.pulsePhase) * 0.5f + 0.5f)
 
-    // 1. Top Grenade Pin / Lever (Metallic Gray)
+    // 1. Top Grenade Pin / Lever & Ring (Proportionally scaled for 2.5x bomb)
     drawRect(
         color = Color(0xFF94A3B8),
-        topLeft = Offset(x - 6f, y - r - 12f),
-        size = Size(12f, 12f)
+        topLeft = Offset(x - r * 0.18f, y - r - r * 0.32f),
+        size = Size(r * 0.36f, r * 0.32f)
     )
     drawArc(
         color = Color(0xFFCBD5E1),
         startAngle = 180f,
         sweepAngle = 180f,
         useCenter = false,
-        topLeft = Offset(x - 10f, y - r - 16f),
-        size = Size(20f, 14f),
-        style = Stroke(width = 2.5.dp.toPx())
+        topLeft = Offset(x - r * 0.28f, y - r - r * 0.44f),
+        size = Size(r * 0.56f, r * 0.38f),
+        style = Stroke(width = (r * 0.08f).coerceAtLeast(4f))
     )
 
-    // 2. Main Grenade Sphere Body (Vibrant Yellow)
+    // 2. Subtle Pulsing Hazard Ring
+    drawCircle(
+        color = Color(0xFFFF6D00).copy(alpha = 0.14f + pulse * 0.18f),
+        radius = r * (1.10f + pulse * 0.06f),
+        center = Offset(x, y)
+    )
+
+    // 3. Main Bomb/Grenade Sphere Body (Vibrant Yellow)
     drawCircle(
         color = target.color,
         radius = r,
         center = Offset(x, y)
     )
 
-    // 3. Segmented Grid Patterns on Grenade
+    // 4. Segmented Grid Patterns on Grenade
     drawCircle(
         color = target.darkColor,
         radius = r,
         center = Offset(x, y),
-        style = Stroke(width = 3.dp.toPx())
+        style = Stroke(width = (r * 0.08f).coerceAtLeast(4f))
     )
     drawLine(
         color = target.darkColor,
-        start = Offset(x - r * 0.72f, y),
-        end = Offset(x + r * 0.72f, y),
-        strokeWidth = 2.5.dp.toPx()
+        start = Offset(x - r * 0.74f, y),
+        end = Offset(x + r * 0.74f, y),
+        strokeWidth = (r * 0.065f).coerceAtLeast(3.5f)
     )
     drawLine(
         color = target.darkColor,
-        start = Offset(x, y - r * 0.72f),
-        end = Offset(x, y + r * 0.72f),
-        strokeWidth = 2.5.dp.toPx()
+        start = Offset(x, y - r * 0.74f),
+        end = Offset(x, y + r * 0.74f),
+        strokeWidth = (r * 0.065f).coerceAtLeast(3.5f)
+    )
+    drawCircle(
+        color = target.darkColor.copy(alpha = 0.45f),
+        radius = r * 0.52f,
+        center = Offset(x, y),
+        style = Stroke(width = (r * 0.045f).coerceAtLeast(2.5f))
     )
 
-    // 4. Gloss shine
+    // 5. Armed Fuse Core Indicator
+    drawCircle(
+        color = Color(0xFFFF3D00).copy(alpha = 0.55f + pulse * 0.45f),
+        radius = r * 0.13f,
+        center = Offset(x, y)
+    )
+
+    // 6. Gloss shine
     drawCircle(
         color = Color(0x99FFFFFF),
-        radius = r * 0.28f,
-        center = Offset(x - r * 0.32f, y - r * 0.32f)
+        radius = r * 0.26f,
+        center = Offset(x - r * 0.34f, y - r * 0.34f)
     )
 }
 

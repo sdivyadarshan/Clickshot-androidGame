@@ -9,9 +9,12 @@ import com.example.data.model.FriendEntity
 import com.example.data.model.MatchHistoryEntity
 import com.example.data.model.UserProfile
 import com.example.data.repository.GameRepository
+import com.example.game.audio.GameSoundEvent
+import com.example.game.audio.SoundEffectsManager
 import com.example.game.engine.GameEngine
 import com.example.game.engine.GameMode
 import com.example.game.engine.GameStatus
+import com.example.game.engine.GunType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -52,8 +55,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     val campaignStages: StateFlow<List<CampaignStage>> = repository.campaignStages
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val soundManager = SoundEffectsManager(application.applicationContext)
+
+    private val _selectedGunType = MutableStateFlow(GunType.PULSE_PISTOL)
+    val selectedGunType: StateFlow<GunType> = _selectedGunType.asStateFlow()
+
+    private val _isSoundEnabled = MutableStateFlow(true)
+    val isSoundEnabled: StateFlow<Boolean> = _isSoundEnabled.asStateFlow()
+
+    private val _isLevelsMenuOpen = MutableStateFlow(false)
+    val isLevelsMenuOpen: StateFlow<Boolean> = _isLevelsMenuOpen.asStateFlow()
+
     // Active Clickshot Physics Game Engine
-    var activeEngine: GameEngine? = GameEngine(levelNumber = 1, gameMode = GameMode.SOLO_PLAY)
+    var activeEngine: GameEngine? = createEngine(levelNumber = 1)
         private set
 
     private val _gameTick = MutableStateFlow(0L)
@@ -63,10 +77,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     val isGamePaused: StateFlow<Boolean> = _isGamePaused.asStateFlow()
 
     private var gameLoopJob: Job? = null
+    private var levelCompletionRecorded = false
+    private var lossSoundPlayed = false
     var currentLevel: Int = 1
 
     init {
         startGameLoop()
+    }
+
+    private fun createEngine(levelNumber: Int): GameEngine {
+        return GameEngine(
+            levelNumber = levelNumber,
+            gameMode = GameMode.SOLO_PLAY,
+            initialGunType = _selectedGunType.value
+        ).apply {
+            onSoundEvent = { event -> soundManager.play(event) }
+        }
     }
 
     fun navigateTo(screen: AppScreen) {
@@ -79,49 +105,111 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Start / Initialize Clickshot Physics Arena
     fun initializeGameArena(width: Float, height: Float) {
         if (activeEngine == null) {
-            activeEngine = GameEngine(levelNumber = currentLevel, gameMode = GameMode.SOLO_PLAY)
+            activeEngine = createEngine(currentLevel)
         }
         activeEngine?.initializeArena(width, height)
-        startGameLoop()
+        if (gameLoopJob?.isActive != true) {
+            startGameLoop()
+        }
     }
 
     fun initializeGameArenaBounds(left: Float, top: Float, right: Float, bottom: Float) {
         if (activeEngine == null) {
-            activeEngine = GameEngine(levelNumber = currentLevel, gameMode = GameMode.SOLO_PLAY)
+            activeEngine = createEngine(currentLevel)
         }
         activeEngine?.initializeArenaWithBounds(left, top, right, bottom)
-        startGameLoop()
+        if (gameLoopJob?.isActive != true) {
+            startGameLoop()
+        }
+    }
+
+    fun selectGunType(type: GunType) {
+        _selectedGunType.value = type
+        activeEngine?.setGunType(type)
+        soundManager.play(GameSoundEvent.UI_CLICK)
+        _gameTick.value = System.currentTimeMillis()
+    }
+
+    fun toggleSound() {
+        val nextEnabled = !_isSoundEnabled.value
+        _isSoundEnabled.value = nextEnabled
+        soundManager.isMuted = !nextEnabled
+        if (nextEnabled) {
+            soundManager.play(GameSoundEvent.UI_CLICK)
+        }
+    }
+
+    fun pauseGame() {
+        _isGamePaused.value = true
+        soundManager.play(GameSoundEvent.UI_CLICK)
+    }
+
+    fun resumeGame() {
+        _isLevelsMenuOpen.value = false
+        _isGamePaused.value = false
+        soundManager.play(GameSoundEvent.UI_CLICK)
+    }
+
+    fun openLevelsMenu() {
+        _isGamePaused.value = true
+        _isLevelsMenuOpen.value = true
+        soundManager.play(GameSoundEvent.UI_CLICK)
+    }
+
+    fun closeLevelsMenu() {
+        _isLevelsMenuOpen.value = false
+        _isGamePaused.value = false
+        soundManager.play(GameSoundEvent.UI_CLICK)
+    }
+
+    fun selectLevel(levelNumber: Int) {
+        val targetLevel = levelNumber.coerceAtLeast(1)
+        currentLevel = targetLevel
+        levelCompletionRecorded = false
+        lossSoundPlayed = false
+
+        val prevLeft = activeEngine?.arenaLeft ?: 40f
+        val prevTop = activeEngine?.arenaTop ?: 60f
+        val prevRight = activeEngine?.arenaRight ?: 760f
+        val prevBottom = activeEngine?.arenaBottom ?: 1140f
+
+        activeEngine = createEngine(targetLevel).apply {
+            initializeArenaWithBounds(prevLeft, prevTop, prevRight, prevBottom)
+        }
+        _isLevelsMenuOpen.value = false
+        _isGamePaused.value = false
+        soundManager.play(GameSoundEvent.UI_CLICK)
+        _gameTick.value = System.currentTimeMillis()
     }
 
     /**
      * One-Touch Tap Control: Triggers physics recoil shot
      */
     fun tapToShoot() {
+        if (_isGamePaused.value || _isLevelsMenuOpen.value) return
         activeEngine?.tapToShoot()
     }
 
     fun resetCurrentLevel() {
+        levelCompletionRecorded = false
+        lossSoundPlayed = false
+        _isLevelsMenuOpen.value = false
+        _isGamePaused.value = false
         activeEngine?.resetLevel()
+        soundManager.play(GameSoundEvent.UI_CLICK)
+        _gameTick.value = System.currentTimeMillis()
     }
 
     fun nextLevel() {
-        currentLevel++
-        val prevLeft = activeEngine?.arenaLeft ?: 40f
-        val prevTop = activeEngine?.arenaTop ?: 60f
-        val prevRight = activeEngine?.arenaRight ?: 760f
-        val prevBottom = activeEngine?.arenaBottom ?: 1140f
-
-        activeEngine = GameEngine(levelNumber = currentLevel, gameMode = GameMode.SOLO_PLAY)
-        activeEngine?.initializeArenaWithBounds(prevLeft, prevTop, prevRight, prevBottom)
+        selectLevel(currentLevel + 1)
     }
 
     fun togglePauseGame() {
-        _isGamePaused.value = !_isGamePaused.value
+        if (_isGamePaused.value) resumeGame() else pauseGame()
     }
 
     private fun startGameLoop() {
         gameLoopJob?.cancel()
-        _isGamePaused.value = false
         gameLoopJob = viewModelScope.launch {
             var lastTime = System.currentTimeMillis()
             while (isActive) {
@@ -129,14 +217,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 val dt = ((now - lastTime) / 1000f).coerceIn(0.001f, 0.05f)
                 lastTime = now
 
-                if (!_isGamePaused.value) {
+                if (!_isGamePaused.value && !_isLevelsMenuOpen.value) {
                     val engine = activeEngine
                     if (engine != null) {
                         engine.update(dt)
                         _gameTick.value = now
 
-                        if (engine.gameStatus == GameStatus.WON && engine.shotsHitCount == 1) {
+                        if (engine.gameStatus == GameStatus.WON && !levelCompletionRecorded) {
+                            levelCompletionRecorded = true
                             handleLevelCompleted(engine)
+                        } else if (engine.gameStatus == GameStatus.LOST && !lossSoundPlayed) {
+                            lossSoundPlayed = true
+                            soundManager.play(GameSoundEvent.LEVEL_LOST)
                         }
                     }
                 }
@@ -199,5 +291,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         gameLoopJob?.cancel()
+        soundManager.release()
     }
 }
