@@ -1,0 +1,7 @@
+{
+  "name": "Clickshot",
+  "description": "Physics-driven recoil action and target shooter with ricochet projectiles and dynamic gun tumbling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

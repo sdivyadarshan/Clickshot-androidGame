@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Clickshot</string>
+    <string name="title_play_offline">Play Solo</string>
+    <string name="title_play_multiplayer">Play Online</string>
+    <string name="title_quick_match">Quick Match</string>
+    <string name="title_custom_lobby">Custom Lobby</string>
+    <string name="title_friends">Friends</string>
+    <string name="title_profile">Profile</string>
+</resources>
+
