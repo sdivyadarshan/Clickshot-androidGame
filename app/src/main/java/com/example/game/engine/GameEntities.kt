@@ -17,9 +17,9 @@ enum class Team {
 
 enum class GameMode(val title: String, val subtitle: String, val maxPlayers: Int) {
     SOLO_PLAY("Play Solo", "Physics target shooting and ricochet action", 1),
-    DUEL_1V1("1v1 Duel", "Coming soon in multiplayer phase", 2),
-    TEAM_2V2("2v2 Team", "Coming soon in multiplayer phase", 4),
-    CUSTOM_LOBBY("Custom Lobby", "Coming soon in multiplayer phase", 4)
+    DUEL_1V1("1v1 Online Duel", "3 simultaneous hits to kill enemy gun", 2),
+    TEAM_2V2("2v2 Team", "Online squad battle", 4),
+    CUSTOM_LOBBY("Room Code Duel", "Play anyone anywhere via Room Code", 2)
 }
 
 enum class DifficultyTier(val displayName: String, val color: Color, val multiplier: Float) {
@@ -180,7 +180,11 @@ data class GunEntity(
     var accentColor: Color = GunType.PULSE_PISTOL.accentColor,
     var isDestroyed: Boolean = false,
     var shotsFired: Int = 0,
-    var recoilKickTimer: Float = 0f // Visual slide blowback timer (seconds)
+    var recoilKickTimer: Float = 0f, // Visual slide blowback timer (seconds)
+    var simultaneousHits: Int = 0, // Requires 3 simultaneous/burst hits to eliminate
+    var hitWindowTimer: Float = 0f,
+    var hitFlashTimer: Float = 0f,
+    var recoveryFlashTimer: Float = 0f
 ) {
     fun applyGunType(type: GunType, arenaScale: Float = 1f) {
         gunType = type
@@ -245,7 +249,8 @@ data class RicochetBullet(
     val glowColor: Color = Color(0xFF00E5FF),
     val trailPoints: MutableList<Offset> = mutableListOf(),
     var isAlive: Boolean = true,
-    var lifetimeSec: Float = 4.0f
+    var lifetimeSec: Float = 4.0f,
+    val ownerId: String = "player"
 )
 
 /**

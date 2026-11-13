@@ -32,8 +32,13 @@ class GameEngine(
     val angularQuadDrag = 0.26f // Quadratic aerodynamic damping for realistic spin decay
     val maxAngularVelocity = 11.5f // Physical cap on spin speed (rad/s)
 
+    // 3-Simultaneous-Hit Elimination Rule Constants (Multiplayer)
+    val killsRequiredHits = 3
+    val simultaneousHitWindowSec = 1.8f
+
     // Core Game Entities
-    val playerGun = GunEntity(gunType = initialGunType)
+    val playerGun = GunEntity(id = "player_gun", gunType = initialGunType)
+    val opponentGun = GunEntity(id = "opponent_gun", gunType = initialGunType)
     val target = TargetEntity()
     var platformObstacle: PlatformObstacle? = null
     var secondPlatformObstacle: PlatformObstacle? = null
@@ -49,13 +54,50 @@ class GameEngine(
     var isInitialized = false
     var currentGunType: GunType = initialGunType
         private set
+    var isOnlineHost: Boolean = true
+    var authoritativeLocalPvp: Boolean = false
+
     var onSoundEvent: ((GameSoundEvent) -> Unit)? = null
+    var onLocalShotFired: ((normX: Float, normY: Float, dirAngle: Float, gunType: GunType, pellets: Int, spreadRadians: Float) -> Unit)? = null
+    var onLocalHitStateChanged: ((simultaneousHits: Int, isEliminated: Boolean) -> Unit)? = null
 
     private var nextBulletId = 1L
 
     private fun computeArenaScale(): Float {
         val arenaW = (arenaRight - arenaLeft).coerceAtLeast(300f)
         return (arenaW / 960f).coerceIn(0.72f, 1.25f)
+    }
+
+    fun normalizeX(worldX: Float): Float {
+        val w = (arenaRight - arenaLeft).coerceAtLeast(1f)
+        return (worldX - arenaLeft) / w
+    }
+
+    fun normalizeY(worldY: Float): Float {
+        val h = (arenaBottom - arenaTop).coerceAtLeast(1f)
+        return (worldY - arenaTop) / h
+    }
+
+    fun normalizeVx(vx: Float): Float {
+        val w = (arenaRight - arenaLeft).coerceAtLeast(1f)
+        return vx / w
+    }
+
+    fun normalizeVy(vy: Float): Float {
+        val h = (arenaBottom - arenaTop).coerceAtLeast(1f)
+        return vy / h
+    }
+
+    private fun denormalizeX(normX: Float): Float = arenaLeft + normX * (arenaRight - arenaLeft)
+    private fun denormalizeY(normY: Float): Float = arenaTop + normY * (arenaBottom - arenaTop)
+    private fun denormalizeVx(normVx: Float): Float = normVx * (arenaRight - arenaLeft)
+    private fun denormalizeVy(normVy: Float): Float = normVy * (arenaBottom - arenaTop)
+
+    fun configureOnlineMatch(hostRole: Boolean) {
+        isOnlineHost = hostRole
+        if (isInitialized) {
+            resetLevel()
+        }
     }
 
     fun setGunType(type: GunType) {
@@ -75,7 +117,6 @@ class GameEngine(
         arenaWidth = width.coerceAtLeast(320f)
         arenaHeight = height.coerceAtLeast(480f)
 
-        // Default frame margins if bounds are not set explicitly
         val marginX = arenaWidth * 0.08f
         val marginY = arenaHeight * 0.08f
         arenaLeft = marginX
@@ -111,19 +152,72 @@ class GameEngine(
         val arenaH = (arenaBottom - arenaTop).coerceAtLeast(300f)
         val scale = computeArenaScale()
 
-        // Apply selected gun type and 2.5x scaled sizes
         playerGun.applyGunType(currentGunType, scale)
         playerGun.recoilKickTimer = 0f
         playerGun.shotsFired = 0
-        target.radius = 85f * scale // 2.5x larger bomb target
-        target.pulsePhase = 0f
+        playerGun.simultaneousHits = 0
+        playerGun.hitWindowTimer = 0f
+        playerGun.hitFlashTimer = 0f
+        playerGun.recoveryFlashTimer = 0f
+        playerGun.isDestroyed = false
+
+        opponentGun.applyGunType(GunType.PULSE_PISTOL, scale)
+        opponentGun.recoilKickTimer = 0f
+        opponentGun.shotsFired = 0
+        opponentGun.simultaneousHits = 0
+        opponentGun.hitWindowTimer = 0f
+        opponentGun.hitFlashTimer = 0f
+        opponentGun.recoveryFlashTimer = 0f
 
         val halfW = playerGun.width * 0.45f
         val halfH = playerGun.height * 0.45f
         val platH = 22f * scale
 
-        // Levels 1-5 have progressively increasing distance between gun and target.
-        // Gun starts near top with natural drop speed and clean spacing for 2.5x entities.
+        if (gameMode == GameMode.DUEL_1V1 || gameMode == GameMode.CUSTOM_LOBBY) {
+            // Online 1v1 PvP Arena: Two rival guns, no static bomb target
+            target.isDestroyed = true
+            opponentGun.isDestroyed = false
+
+            val leftX = (arenaLeft + arenaW * 0.24f).coerceIn(arenaLeft + halfW + 8f, arenaRight - halfW - 8f)
+            val rightX = (arenaLeft + arenaW * 0.76f).coerceIn(arenaLeft + halfW + 8f, arenaRight - halfW - 8f)
+            val spawnY = (arenaTop + arenaH * 0.22f).coerceIn(arenaTop + halfH + 8f, arenaBottom - halfH - 8f)
+
+            if (isOnlineHost) {
+                playerGun.x = leftX
+                playerGun.y = spawnY
+                playerGun.angle = -0.05f
+                opponentGun.x = rightX
+                opponentGun.y = spawnY
+                opponentGun.angle = (-PI + 0.05f).toFloat()
+            } else {
+                playerGun.x = rightX
+                playerGun.y = spawnY
+                playerGun.angle = (-PI + 0.05f).toFloat()
+                opponentGun.x = leftX
+                opponentGun.y = spawnY
+                opponentGun.angle = -0.05f
+            }
+            playerGun.vx = 0f
+            playerGun.vy = 55f
+            playerGun.angularVelocity = 0f
+            opponentGun.vx = 0f
+            opponentGun.vy = 55f
+            opponentGun.angularVelocity = 0f
+
+            // Tactical central ricochet bunker for angle shots & simultaneous 3-hit traps
+            val midW = arenaW * 0.30f
+            val midX = arenaLeft + (arenaW - midW) * 0.5f
+            val midY = arenaTop + arenaH * 0.56f
+            platformObstacle = PlatformObstacle(midX, midY, midW, platH, Color(0xFF475569))
+            secondPlatformObstacle = null
+            return
+        }
+
+        // Solo mode: opponent gun inactive, bomb target active
+        opponentGun.isDestroyed = true
+        target.radius = 85f * scale // 2.5x larger bomb target
+        target.pulsePhase = 0f
+
         when (levelNumber) {
             1 -> {
                 playerGun.x = (arenaLeft + arenaW * 0.25f).coerceIn(arenaLeft + halfW + 8f, arenaRight - halfW - 8f)
@@ -132,7 +226,6 @@ class GameEngine(
                 playerGun.vy = 55f
                 playerGun.angle = -0.05f
                 playerGun.angularVelocity = 0f
-                playerGun.isDestroyed = false
 
                 val targetX = (arenaLeft + arenaW * 0.72f).coerceAtMost(arenaRight - target.radius - 16f)
                 val targetY = (arenaTop + arenaH * 0.25f).coerceAtLeast(arenaTop + target.radius + 40f * scale)
@@ -155,7 +248,6 @@ class GameEngine(
                 playerGun.vy = 60f
                 playerGun.angle = -0.08f
                 playerGun.angularVelocity = 0f
-                playerGun.isDestroyed = false
 
                 val targetX = (arenaLeft + arenaW * 0.75f).coerceAtMost(arenaRight - target.radius - 16f)
                 val targetY = (arenaTop + arenaH * 0.34f).coerceAtLeast(arenaTop + target.radius + 40f * scale)
@@ -178,7 +270,6 @@ class GameEngine(
                 playerGun.vy = 65f
                 playerGun.angle = -0.14f
                 playerGun.angularVelocity = 0f
-                playerGun.isDestroyed = false
 
                 val targetX = (arenaLeft + arenaW * 0.78f).coerceAtMost(arenaRight - target.radius - 16f)
                 val targetY = (arenaTop + arenaH * 0.44f).coerceAtLeast(arenaTop + target.radius + 40f * scale)
@@ -201,7 +292,6 @@ class GameEngine(
                 playerGun.vy = 65f
                 playerGun.angle = -0.18f
                 playerGun.angularVelocity = 0f
-                playerGun.isDestroyed = false
 
                 val targetX = (arenaLeft + arenaW * 0.80f).coerceAtMost(arenaRight - target.radius - 16f)
                 val targetY = (arenaTop + arenaH * 0.54f).coerceAtLeast(arenaTop + target.radius + 40f * scale)
@@ -224,7 +314,6 @@ class GameEngine(
                 playerGun.vy = 65f
                 playerGun.angle = -0.22f
                 playerGun.angularVelocity = 0f
-                playerGun.isDestroyed = false
 
                 val targetX = (arenaLeft + arenaW * 0.82f).coerceAtMost(arenaRight - target.radius - 16f)
                 val targetY = (arenaTop + arenaH * 0.62f).coerceAtLeast(arenaTop + target.radius + 40f * scale)
@@ -241,7 +330,6 @@ class GameEngine(
                 secondPlatformObstacle = null
             }
             else -> {
-                // Level 6+: Procedural / Randomized layout with varied positions & obstacles
                 val rand = Random(levelNumber.toLong() * 31L + 7L)
                 val spawnLeft = rand.nextBoolean()
                 val gunSideX = if (spawnLeft) rand.nextFloat() * 0.10f + 0.18f else rand.nextFloat() * 0.10f + 0.72f
@@ -253,7 +341,6 @@ class GameEngine(
                 playerGun.vy = 65f
                 playerGun.angle = if (spawnLeft) -0.15f else (-PI + 0.15f).toFloat()
                 playerGun.angularVelocity = 0f
-                playerGun.isDestroyed = false
 
                 val targetX = (arenaLeft + arenaW * targetSideX).coerceIn(arenaLeft + target.radius + 16f, arenaRight - target.radius - 16f)
                 val targetY = (arenaTop + arenaH * (rand.nextFloat() * 0.34f + 0.30f))
@@ -300,7 +387,6 @@ class GameEngine(
         val forward = playerGun.getForwardVector()
         val backward = playerGun.getBackwardVector()
 
-        // 1. Spawn Projectile(s) at barrel tip
         val pelletCount = type.pelletsPerShot
         val centerIdx = (pelletCount - 1) / 2f
         for (i in 0 until pelletCount) {
@@ -318,30 +404,140 @@ class GameEngine(
                 radius = type.bulletRadius,
                 bouncesLeft = type.maxBounces,
                 maxBounces = type.maxBounces,
-                glowColor = type.bulletGlowColor
+                glowColor = type.bulletGlowColor,
+                ownerId = "player"
             )
             bullet.trailPoints.add(Offset(bullet.x, bullet.y))
             bullets.add(bullet)
         }
 
-        // 2. Apply Mass-Scaled Newtonian Recoil Impulse (Δv = J / m)
         val linearImpulse = type.recoilImpulse / playerGun.mass
         playerGun.vx += backward.x * linearImpulse
         playerGun.vy += backward.y * linearImpulse
 
-        // 3. Apply Realistic Lever-Arm Muzzle-Flip Torque (Δω = τ / I)
-        // Barrel axis sits above the Center of Mass (r_y = -lever), recoil acts backward (-J_x),
-        // producing natural negative (CCW) muzzle rise relative to the gun's frame.
         val inertia = playerGun.getMomentOfInertia()
         val torqueImpulse = -(type.recoilImpulse / 145f) * type.barrelLeverFraction * 8.2f / inertia
         playerGun.angularVelocity = (playerGun.angularVelocity + torqueImpulse)
             .coerceIn(-maxAngularVelocity, maxAngularVelocity)
 
-        // 4. Spawn Muzzle Flash & Smoke Particles
         spawnMuzzleEffect(barrelTip, forward, type.bulletGlowColor)
         onSoundEvent?.invoke(GameSoundEvent.forGun(type))
+        onLocalShotFired?.invoke(
+            normalizeX(barrelTip.x),
+            normalizeY(barrelTip.y),
+            playerGun.angle,
+            type,
+            pelletCount,
+            type.spreadRadians
+        )
 
         return true
+    }
+
+    /**
+     * Applies synced Firestore pose from remote opponent device anywhere on the internet.
+     */
+    fun applyRemoteOpponentState(
+        normX: Float,
+        normY: Float,
+        normVx: Float,
+        normVy: Float,
+        angle: Float,
+        angularVelocity: Float,
+        gunType: GunType,
+        simultaneousHits: Int,
+        isEliminated: Boolean
+    ) {
+        if (!isInitialized) return
+        val scale = computeArenaScale()
+        if (opponentGun.gunType != gunType) {
+            opponentGun.applyGunType(gunType, scale)
+        }
+
+        val targetX = denormalizeX(normX)
+        val targetY = denormalizeY(normY)
+        val dx = targetX - opponentGun.x
+        val dy = targetY - opponentGun.y
+        if (dx * dx + dy * dy > 160f * 160f) {
+            opponentGun.x = targetX
+            opponentGun.y = targetY
+        } else {
+            opponentGun.x += dx * 0.55f
+            opponentGun.y += dy * 0.55f
+        }
+        opponentGun.vx = denormalizeVx(normVx)
+        opponentGun.vy = denormalizeVy(normVy)
+        opponentGun.angle = angle
+        opponentGun.angularVelocity = angularVelocity
+
+        if (!authoritativeLocalPvp) {
+            opponentGun.simultaneousHits = simultaneousHits.coerceIn(0, killsRequiredHits)
+            if (opponentGun.simultaneousHits > 0) {
+                opponentGun.hitWindowTimer = simultaneousHitWindowSec
+            }
+            if (isEliminated && !opponentGun.isDestroyed) {
+                eliminateOpponentGun()
+            }
+        }
+    }
+
+    fun markOpponentEliminatedFromRoomWinner() {
+        if (!opponentGun.isDestroyed && gameStatus == GameStatus.PLAYING) {
+            opponentGun.simultaneousHits = killsRequiredHits
+            eliminateOpponentGun()
+        }
+    }
+
+    private fun eliminateOpponentGun() {
+        opponentGun.isDestroyed = true
+        opponentGun.simultaneousHits = killsRequiredHits
+        gameStatus = GameStatus.WON
+        spawnGunDestructionEffect(opponentGun.x, opponentGun.y, opponentGun.color)
+        onSoundEvent?.invoke(GameSoundEvent.ARMOR_BREAK)
+        onSoundEvent?.invoke(GameSoundEvent.LEVEL_WON)
+    }
+
+    /**
+     * Spawns projectiles fired by the remote opponent over Firestore.
+     */
+    fun spawnRemoteShot(
+        normX: Float,
+        normY: Float,
+        dirAngle: Float,
+        gunType: GunType,
+        pellets: Int,
+        spreadRadians: Float
+    ) {
+        if (!isInitialized || gameStatus != GameStatus.PLAYING || opponentGun.isDestroyed) return
+
+        val worldX = denormalizeX(normX)
+        val worldY = denormalizeY(normY)
+        opponentGun.recoilKickTimer = 0.14f
+        opponentGun.shotsFired++
+
+        val count = pellets.coerceIn(1, 5)
+        val centerIdx = (count - 1) / 2f
+        for (i in 0 until count) {
+            val angleOffset = (i - centerIdx) * spreadRadians
+            val shotAngle = dirAngle + angleOffset
+            val bullet = RicochetBullet(
+                id = nextBulletId++,
+                x = worldX,
+                y = worldY,
+                vx = cos(shotAngle) * gunType.bulletSpeed,
+                vy = sin(shotAngle) * gunType.bulletSpeed,
+                radius = gunType.bulletRadius,
+                bouncesLeft = gunType.maxBounces,
+                maxBounces = gunType.maxBounces,
+                color = Color(0xFFFFE4E6),
+                glowColor = Color(0xFFFF3366),
+                ownerId = "opponent"
+            )
+            bullet.trailPoints.add(Offset(bullet.x, bullet.y))
+            bullets.add(bullet)
+        }
+        spawnMuzzleEffect(Offset(worldX, worldY), Offset(cos(dirAngle), sin(dirAngle)), Color(0xFFFF3366))
+        onSoundEvent?.invoke(GameSoundEvent.forGun(gunType))
     }
 
     /**
@@ -351,142 +547,174 @@ class GameEngine(
         if (!isInitialized) return
         val clampedDt = dt.coerceIn(0.001f, 0.033f)
 
-        // Animate target fuse pulse
         if (!target.isDestroyed) {
             target.pulsePhase += clampedDt * 5f
         }
 
-        // 1. Update Gun Physics
+        // 1. Update Local Player Gun Physics & Simultaneous-Hit Window
         if (!playerGun.isDestroyed) {
-            if (playerGun.recoilKickTimer > 0f) {
-                playerGun.recoilKickTimer = (playerGun.recoilKickTimer - clampedDt).coerceAtLeast(0f)
+            updateGunTimers(playerGun, clampedDt) {
+                onLocalHitStateChanged?.invoke(0, false)
             }
-            updateGunPhysics(clampedDt)
+            updateSingleGunPhysics(playerGun, clampedDt)
         }
 
-        // 2. Update Bullets Physics & Ricochets
+        // 2. Update Remote Opponent Gun Physics & Timers (in Multiplayer)
+        if ((gameMode == GameMode.DUEL_1V1 || gameMode == GameMode.CUSTOM_LOBBY) && !opponentGun.isDestroyed) {
+            updateGunTimers(opponentGun, clampedDt) {}
+            updateSingleGunPhysics(opponentGun, clampedDt)
+        }
+
+        // 3. Update Bullets Physics & Ricochets
         updateBulletsPhysics(clampedDt)
 
-        // 3. Update Debris Fragments & Particles
+        // 4. Update Debris Fragments & Particles
         updateDebrisAndParticles(clampedDt)
 
-        // 4. Check Win / Loss Conditions
+        // 5. Check Win / Loss Conditions
         checkGameState()
     }
 
-    private fun updateGunPhysics(dt: Float) {
-        // Apply Crisp Gravity
-        playerGun.vy += gravity * dt
+    private fun updateGunTimers(gun: GunEntity, dt: Float, onWindowExpiredReset: () -> Unit) {
+        if (gun.recoilKickTimer > 0f) {
+            gun.recoilKickTimer = (gun.recoilKickTimer - dt).coerceAtLeast(0f)
+        }
+        if (gun.hitFlashTimer > 0f) {
+            gun.hitFlashTimer = (gun.hitFlashTimer - dt).coerceAtLeast(0f)
+        }
+        if (gun.recoveryFlashTimer > 0f) {
+            gun.recoveryFlashTimer = (gun.recoveryFlashTimer - dt).coerceAtLeast(0f)
+        }
+        if (gun.hitWindowTimer > 0f && gun.simultaneousHits in 1 until killsRequiredHits) {
+            gun.hitWindowTimer = (gun.hitWindowTimer - dt).coerceAtLeast(0f)
+            if (gun.hitWindowTimer == 0f) {
+                gun.simultaneousHits = 0
+                gun.recoveryFlashTimer = 0.45f
+                onWindowExpiredReset()
+            }
+        }
+    }
 
-        // Apply Linear Air Drag
-        playerGun.vx *= (1f - linearDrag * dt).coerceIn(0f, 1f)
-        playerGun.vy *= (1f - (linearDrag * 0.35f) * dt).coerceIn(0f, 1f)
+    private fun updateSingleGunPhysics(gun: GunEntity, dt: Float) {
+        gun.vy += gravity * dt
 
-        // Apply Quadratic + Linear Aerodynamic Rotational Damping
-        // High spin decays rapidly after a shot; gentle coasting settles smoothly.
-        val spinDamping = (angularLinearDrag + angularQuadDrag * abs(playerGun.angularVelocity)) * dt
-        playerGun.angularVelocity *= (1f - spinDamping.coerceIn(0f, 0.9f))
-        if (abs(playerGun.angularVelocity) < 0.04f) {
-            playerGun.angularVelocity = 0f
+        gun.vx *= (1f - linearDrag * dt).coerceIn(0f, 1f)
+        gun.vy *= (1f - (linearDrag * 0.35f) * dt).coerceIn(0f, 1f)
+
+        val spinDamping = (angularLinearDrag + angularQuadDrag * abs(gun.angularVelocity)) * dt
+        gun.angularVelocity *= (1f - spinDamping.coerceIn(0f, 0.9f))
+        if (abs(gun.angularVelocity) < 0.04f) {
+            gun.angularVelocity = 0f
         }
 
-        // Integrate Position & Orientation
-        playerGun.x += playerGun.vx * dt
-        playerGun.y += playerGun.vy * dt
-        playerGun.angle += playerGun.angularVelocity * dt
+        gun.x += gun.vx * dt
+        gun.y += gun.vy * dt
+        gun.angle += gun.angularVelocity * dt
 
-        // Normalize Angle between -PI and PI
-        while (playerGun.angle > PI) playerGun.angle -= (2 * PI).toFloat()
-        while (playerGun.angle < -PI) playerGun.angle += (2 * PI).toFloat()
+        while (gun.angle > PI) gun.angle -= (2 * PI).toFloat()
+        while (gun.angle < -PI) gun.angle += (2 * PI).toFloat()
 
-        // Gun Collision against Arena Boundaries with realistic contact torque
-        val halfW = playerGun.width * 0.42f
-        val halfH = playerGun.height * 0.42f
+        val halfW = gun.width * 0.42f
+        val halfH = gun.height * 0.42f
+        val emitWallAudio = (gun.id == "player_gun")
 
-        // Left Wall
-        if (playerGun.x - halfW < arenaLeft) {
-            playerGun.x = arenaLeft + halfW
-            if (abs(playerGun.vx) > 95f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
-            playerGun.vx = -playerGun.vx * wallRestitution
-            playerGun.angularVelocity = (playerGun.angularVelocity * 0.65f - playerGun.vy * 0.0045f)
+        if (gun.x - halfW < arenaLeft) {
+            gun.x = arenaLeft + halfW
+            if (emitWallAudio && abs(gun.vx) > 95f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
+            gun.vx = -gun.vx * wallRestitution
+            gun.angularVelocity = (gun.angularVelocity * 0.65f - gun.vy * 0.0045f)
                 .coerceIn(-maxAngularVelocity, maxAngularVelocity)
-            spawnWallImpactSparks(arenaLeft, playerGun.y, 1f, 0f)
+            spawnWallImpactSparks(arenaLeft, gun.y, 1f, 0f)
         }
-        // Right Wall
-        if (playerGun.x + halfW > arenaRight) {
-            playerGun.x = arenaRight - halfW
-            if (abs(playerGun.vx) > 95f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
-            playerGun.vx = -playerGun.vx * wallRestitution
-            playerGun.angularVelocity = (playerGun.angularVelocity * 0.65f + playerGun.vy * 0.0045f)
+        if (gun.x + halfW > arenaRight) {
+            gun.x = arenaRight - halfW
+            if (emitWallAudio && abs(gun.vx) > 95f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
+            gun.vx = -gun.vx * wallRestitution
+            gun.angularVelocity = (gun.angularVelocity * 0.65f + gun.vy * 0.0045f)
                 .coerceIn(-maxAngularVelocity, maxAngularVelocity)
-            spawnWallImpactSparks(arenaRight, playerGun.y, -1f, 0f)
+            spawnWallImpactSparks(arenaRight, gun.y, -1f, 0f)
         }
-        // Ceiling
-        if (playerGun.y - halfH < arenaTop) {
-            playerGun.y = arenaTop + halfH
-            if (abs(playerGun.vy) > 95f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
-            playerGun.vy = -playerGun.vy * wallRestitution
-            playerGun.angularVelocity = (playerGun.angularVelocity * 0.65f - playerGun.vx * 0.0045f)
+        if (gun.y - halfH < arenaTop) {
+            gun.y = arenaTop + halfH
+            if (emitWallAudio && abs(gun.vy) > 95f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
+            gun.vy = -gun.vy * wallRestitution
+            gun.angularVelocity = (gun.angularVelocity * 0.65f - gun.vx * 0.0045f)
                 .coerceIn(-maxAngularVelocity, maxAngularVelocity)
-            spawnWallImpactSparks(playerGun.x, arenaTop, 0f, 1f)
+            spawnWallImpactSparks(gun.x, arenaTop, 0f, 1f)
         }
-        // Floor
-        if (playerGun.y + halfH > arenaBottom) {
-            playerGun.y = arenaBottom - halfH
-            if (abs(playerGun.vy) > 120f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
-            playerGun.vy = -playerGun.vy * wallRestitution
-            // Ground friction creates rolling torque from horizontal velocity and settles tilted guns
-            playerGun.angularVelocity = (playerGun.angularVelocity * 0.58f + playerGun.vx * 0.004f)
+        if (gun.y + halfH > arenaBottom) {
+            gun.y = arenaBottom - halfH
+            if (emitWallAudio && abs(gun.vy) > 120f) onSoundEvent?.invoke(GameSoundEvent.GUN_BOUNCE)
+            gun.vy = -gun.vy * wallRestitution
+            gun.angularVelocity = (gun.angularVelocity * 0.58f + gun.vx * 0.004f)
                 .coerceIn(-maxAngularVelocity, maxAngularVelocity)
-            playerGun.vx *= 0.88f
-            if (abs(playerGun.vy) < 40f) {
-                playerGun.vy = 0f
-                // Settle gun angle gently toward nearest flat/upright rest on the floor
-                playerGun.angularVelocity *= 0.72f
+            gun.vx *= 0.88f
+            if (abs(gun.vy) < 40f) {
+                gun.vy = 0f
+                gun.angularVelocity *= 0.72f
             }
         }
 
-        // Platform Obstacle Collisions for Gun
-        checkPlatformCollisionForGun(platformObstacle, halfW, halfH)
-        checkPlatformCollisionForGun(secondPlatformObstacle, halfW, halfH)
+        checkPlatformCollisionForGun(gun, platformObstacle, halfW, halfH)
+        checkPlatformCollisionForGun(gun, secondPlatformObstacle, halfW, halfH)
     }
 
-    private fun checkPlatformCollisionForGun(plat: PlatformObstacle?, halfW: Float, halfH: Float) {
+    private fun checkPlatformCollisionForGun(
+        gun: GunEntity,
+        plat: PlatformObstacle?,
+        halfW: Float,
+        halfH: Float
+    ) {
         if (plat == null) return
         val platLeft = plat.x
         val platRight = plat.x + plat.width
         val platTop = plat.y
         val platBottom = plat.y + plat.height
 
-        if (playerGun.x + halfW > platLeft && playerGun.x - halfW < platRight &&
-            playerGun.y + halfH > platTop && playerGun.y - halfH < platBottom
+        if (gun.x + halfW > platLeft && gun.x - halfW < platRight &&
+            gun.y + halfH > platTop && gun.y - halfH < platBottom
         ) {
-            val overlapTop = (playerGun.y + halfH) - platTop
-            val overlapBottom = platBottom - (playerGun.y - halfH)
-            val overlapLeft = (playerGun.x + halfW) - platLeft
-            val overlapRight = platRight - (playerGun.x - halfW)
+            val overlapTop = (gun.y + halfH) - platTop
+            val overlapBottom = platBottom - (gun.y - halfH)
+            val overlapLeft = (gun.x + halfW) - platLeft
+            val overlapRight = platRight - (gun.x - halfW)
 
-            val minOverlap = minOf(overlapTop, overlapBottom, overlapLeft, overlapRight)
-            when (minOverlap) {
+            when (minOf(overlapTop, overlapBottom, overlapLeft, overlapRight)) {
                 overlapTop -> {
-                    playerGun.y = platTop - halfH
-                    playerGun.vy = -playerGun.vy * wallRestitution
-                    playerGun.vx *= 0.90f
+                    gun.y = platTop - halfH
+                    gun.vy = -gun.vy * wallRestitution
+                    gun.vx *= 0.90f
                 }
                 overlapBottom -> {
-                    playerGun.y = platBottom + halfH
-                    playerGun.vy = -playerGun.vy * wallRestitution
+                    gun.y = platBottom + halfH
+                    gun.vy = -gun.vy * wallRestitution
                 }
                 overlapLeft -> {
-                    playerGun.x = platLeft - halfW
-                    playerGun.vx = -playerGun.vx * wallRestitution
+                    gun.x = platLeft - halfW
+                    gun.vx = -gun.vx * wallRestitution
                 }
                 overlapRight -> {
-                    playerGun.x = platRight + halfW
-                    playerGun.vx = -playerGun.vx * wallRestitution
+                    gun.x = platRight + halfW
+                    gun.vx = -gun.vx * wallRestitution
                 }
             }
         }
+    }
+
+    private fun isBulletHittingGun(bullet: RicochetBullet, gun: GunEntity): Boolean {
+        val dx = bullet.x - gun.x
+        val dy = bullet.y - gun.y
+        val cosA = cos(-gun.angle)
+        val sinA = sin(-gun.angle)
+        val localX = dx * cosA - dy * sinA
+        val localY = dx * sinA + dy * cosA
+        val halfW = gun.width * 0.42f
+        val halfH = gun.height * 0.38f
+        val closestX = localX.coerceIn(-halfW, halfW)
+        val closestY = localY.coerceIn(-halfH, halfH)
+        val distX = localX - closestX
+        val distY = localY - closestY
+        return (distX * distX + distY * distY) <= (bullet.radius * bullet.radius)
     }
 
     private fun updateBulletsPhysics(dt: Float) {
@@ -500,17 +728,14 @@ class GameEngine(
                 continue
             }
 
-            // Sub-stepping for precise high-speed ricochet collision
             val steps = 4
             val stepDt = dt / steps
             var hitOccurred = false
 
             for (step in 0 until steps) {
-                // Move bullet
                 bullet.x += bullet.vx * stepDt
                 bullet.y += bullet.vy * stepDt
 
-                // Keep trail history
                 if (step == 0) {
                     bullet.trailPoints.add(Offset(bullet.x, bullet.y))
                     if (bullet.trailPoints.size > 16) {
@@ -518,14 +743,13 @@ class GameEngine(
                     }
                 }
 
-                // 1. Check Collision with Target
+                // 1A. Solo Mode: Check Collision with Bomb Target
                 if (!target.isDestroyed) {
                     val dx = bullet.x - target.x
                     val dy = bullet.y - target.y
                     val distSq = dx * dx + dy * dy
                     val hitDist = bullet.radius + target.radius
                     if (distSq <= hitDist * hitDist) {
-                        // TARGET HIT & DESTROYED!
                         target.isDestroyed = true
                         shotsHitCount++
                         bullet.isAlive = false
@@ -538,7 +762,23 @@ class GameEngine(
                     }
                 }
 
-                // 2. Check Boundary Collisions (Left, Right, Top, Bottom)
+                // 1B. Multiplayer PvP: Check Collision with Rival Guns (3-Simultaneous-Hit Rule!)
+                if (gameMode == GameMode.DUEL_1V1 || gameMode == GameMode.CUSTOM_LOBBY) {
+                    if (bullet.ownerId == "opponent" && !playerGun.isDestroyed && isBulletHittingGun(bullet, playerGun)) {
+                        bullet.isAlive = false
+                        handleLocalGunHitByBullet(bullet)
+                        hitOccurred = true
+                        break
+                    } else if (bullet.ownerId == "player" && !opponentGun.isDestroyed && isBulletHittingGun(bullet, opponentGun)) {
+                        bullet.isAlive = false
+                        shotsHitCount++
+                        handleOpponentGunHitLocally(bullet)
+                        hitOccurred = true
+                        break
+                    }
+                }
+
+                // 2. Check Boundary Collisions
                 if (bullet.x - bullet.radius <= arenaLeft) {
                     bullet.x = arenaLeft + bullet.radius
                     reflectBullet(bullet, normalX = 1f, normalY = 0f)
@@ -571,6 +811,54 @@ class GameEngine(
         }
     }
 
+    private fun handleLocalGunHitByBullet(bullet: RicochetBullet) {
+        playerGun.vx += bullet.vx * 0.16f
+        playerGun.vy += bullet.vy * 0.14f
+        playerGun.angularVelocity = (playerGun.angularVelocity + (Random.nextFloat() - 0.5f) * 6f)
+            .coerceIn(-maxAngularVelocity, maxAngularVelocity)
+
+        playerGun.simultaneousHits = (playerGun.simultaneousHits + 1).coerceAtMost(killsRequiredHits)
+        playerGun.hitWindowTimer = simultaneousHitWindowSec
+        playerGun.hitFlashTimer = 0.24f
+
+        val killed = playerGun.simultaneousHits >= killsRequiredHits
+        spawnArmorHitSparks(bullet.x, bullet.y, isBreak = killed)
+
+        if (killed) {
+            playerGun.isDestroyed = true
+            gameStatus = GameStatus.LOST
+            spawnGunDestructionEffect(playerGun.x, playerGun.y, playerGun.color)
+            onSoundEvent?.invoke(GameSoundEvent.ARMOR_BREAK)
+            onSoundEvent?.invoke(GameSoundEvent.LEVEL_LOST)
+            onLocalHitStateChanged?.invoke(killsRequiredHits, true)
+        } else {
+            onSoundEvent?.invoke(GameSoundEvent.ARMOR_HIT)
+            onLocalHitStateChanged?.invoke(playerGun.simultaneousHits, false)
+        }
+    }
+
+    private fun handleOpponentGunHitLocally(bullet: RicochetBullet) {
+        opponentGun.vx += bullet.vx * 0.12f
+        opponentGun.vy += bullet.vy * 0.10f
+        opponentGun.hitFlashTimer = 0.24f
+
+        if (authoritativeLocalPvp) {
+            opponentGun.simultaneousHits = (opponentGun.simultaneousHits + 1).coerceAtMost(killsRequiredHits)
+            opponentGun.hitWindowTimer = simultaneousHitWindowSec
+            val killed = opponentGun.simultaneousHits >= killsRequiredHits
+            spawnArmorHitSparks(bullet.x, bullet.y, isBreak = killed)
+            if (killed) {
+                eliminateOpponentGun()
+            } else {
+                onSoundEvent?.invoke(GameSoundEvent.ARMOR_HIT)
+            }
+        } else {
+            // Immediate visual hit feedback; remote defender commits final 3-hit elimination
+            spawnArmorHitSparks(bullet.x, bullet.y, isBreak = false)
+            onSoundEvent?.invoke(GameSoundEvent.ARMOR_HIT)
+        }
+    }
+
     private fun checkPlatformRicochet(bullet: RicochetBullet, plat: PlatformObstacle?) {
         if (plat == null || !bullet.isAlive) return
         if (bullet.x + bullet.radius >= plat.x &&
@@ -583,8 +871,7 @@ class GameEngine(
             val overlapLeft = abs((bullet.x + bullet.radius) - plat.x)
             val overlapRight = abs((plat.x + plat.width) - (bullet.x - bullet.radius))
 
-            val minO = minOf(overlapTop, overlapBottom, overlapLeft, overlapRight)
-            when (minO) {
+            when (minOf(overlapTop, overlapBottom, overlapLeft, overlapRight)) {
                 overlapTop -> {
                     bullet.y = plat.y - bullet.radius
                     reflectBullet(bullet, 0f, -1f)
@@ -605,10 +892,6 @@ class GameEngine(
         }
     }
 
-    /**
-     * Exact 2D Vector Normal Reflection:
-     * v' = (v - 2 * (v · n) * n) * restitution
-     */
     private fun reflectBullet(bullet: RicochetBullet, normalX: Float, normalY: Float) {
         val dot = bullet.vx * normalX + bullet.vy * normalY
         bullet.vx = (bullet.vx - 2f * dot * normalX) * bulletRestitution
@@ -624,7 +907,6 @@ class GameEngine(
     }
 
     private fun updateDebrisAndParticles(dt: Float) {
-        // Update Debris Fragments
         val debrisIterator = debrisList.iterator()
         while (debrisIterator.hasNext()) {
             val d = debrisIterator.next()
@@ -640,7 +922,6 @@ class GameEngine(
             d.alpha = (d.life / d.maxLife).coerceIn(0f, 1f)
         }
 
-        // Update Particle Sparks
         val particleIterator = particles.iterator()
         while (particleIterator.hasNext()) {
             val p = particleIterator.next()
@@ -656,9 +937,12 @@ class GameEngine(
     }
 
     private fun checkGameState() {
-        if (gameStatus == GameStatus.WON) return
+        if (gameStatus != GameStatus.PLAYING) return
+        if (gameMode == GameMode.DUEL_1V1 || gameMode == GameMode.CUSTOM_LOBBY) {
+            // In PvP, guns stay enclosed inside the chamber; only 3 simultaneous hits can eliminate!
+            return
+        }
 
-        // Out of bounds lose condition safety
         if (playerGun.y > arenaBottom + 120f || playerGun.y < arenaTop - 200f) {
             gameStatus = GameStatus.LOST
         }
@@ -691,6 +975,26 @@ class GameEngine(
         }
     }
 
+    private fun spawnArmorHitSparks(x: Float, y: Float, isBreak: Boolean) {
+        val count = if (isBreak) 24 else 14
+        for (i in 0 until count) {
+            val angle = Random.nextFloat() * 2 * PI.toFloat()
+            val speed = Random.nextFloat() * 340f + 120f
+            particles.add(
+                Particle(
+                    x = x,
+                    y = y,
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed,
+                    color = if (isBreak) Color(0xFFFF1744) else if (i % 2 == 0) Color(0xFFFF9100) else Color(0xFFFFFFFF),
+                    radius = Random.nextFloat() * 6f + 3f,
+                    life = 0.42f,
+                    maxLife = 0.42f
+                )
+            )
+        }
+    }
+
     private fun spawnWallImpactSparks(x: Float, y: Float, normalX: Float, normalY: Float) {
         val count = 8
         for (i in 0 until count) {
@@ -716,8 +1020,51 @@ class GameEngine(
         }
     }
 
+    private fun spawnGunDestructionEffect(x: Float, y: Float, tint: Color) {
+        val debrisCount = 22
+        for (i in 0 until debrisCount) {
+            val angle = Random.nextFloat() * 2 * PI.toFloat()
+            val speed = Random.nextFloat() * 540f + 180f
+            debrisList.add(
+                DebrisFragment(
+                    x = x + (Random.nextFloat() - 0.5f) * 50f,
+                    y = y + (Random.nextFloat() - 0.5f) * 50f,
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed - 180f,
+                    angle = Random.nextFloat() * 6.28f,
+                    angularVelocity = (Random.nextFloat() - 0.5f) * 20f,
+                    width = Random.nextFloat() * 28f + 16f,
+                    height = Random.nextFloat() * 20f + 10f,
+                    color = if (i % 2 == 0) tint else Color(0xFFFF5252),
+                    life = 1.6f,
+                    maxLife = 1.6f
+                )
+            )
+        }
+        val particleCount = 44
+        for (i in 0 until particleCount) {
+            val angle = Random.nextFloat() * 2 * PI.toFloat()
+            val speed = Random.nextFloat() * 560f + 90f
+            particles.add(
+                Particle(
+                    x = x,
+                    y = y,
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed,
+                    color = when (i % 3) {
+                        0 -> Color(0xFFFF1744)
+                        1 -> Color(0xFFFFD600)
+                        else -> Color.White
+                    },
+                    radius = Random.nextFloat() * 9f + 4f,
+                    life = Random.nextFloat() * 0.55f + 0.35f,
+                    maxLife = 0.75f
+                )
+            )
+        }
+    }
+
     private fun spawnTargetDestructionEffect(x: Float, y: Float) {
-        // Spawn Debris Fragments scaled for 2.5x larger bomb
         val debrisCount = 20
         for (i in 0 until debrisCount) {
             val angle = Random.nextFloat() * 2 * PI.toFloat()
@@ -739,7 +1086,6 @@ class GameEngine(
             )
         }
 
-        // Spawn Spark/Flame Particles
         val particleCount = 44
         for (i in 0 until particleCount) {
             val angle = Random.nextFloat() * 2 * PI.toFloat()

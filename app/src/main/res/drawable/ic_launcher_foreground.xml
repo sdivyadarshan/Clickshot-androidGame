@@ -3,7 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/ic_launcher_cyber_clash"
+        android:drawable="@drawable/ic_launcher_clickshot"
         android:gravity="center" />
 </layer-list>
-

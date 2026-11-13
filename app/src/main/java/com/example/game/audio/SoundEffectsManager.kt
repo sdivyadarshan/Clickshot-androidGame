@@ -29,6 +29,8 @@ enum class GameSoundEvent(val rawResName: String) {
     BULLET_RICOCHET("sfx_ricochet"),
     GUN_BOUNCE("sfx_bounce"),
     TARGET_EXPLOSION("sfx_explosion"),
+    ARMOR_HIT("sfx_armor_hit"),
+    ARMOR_BREAK("sfx_armor_break"),
     LEVEL_WON("sfx_win"),
     LEVEL_LOST("sfx_lose"),
     UI_CLICK("sfx_click");
@@ -175,6 +177,8 @@ class SoundEffectsManager(private val context: Context? = null) {
         GameSoundEvent.BULLET_RICOCHET -> synthRicochet(durationMs = 150)
         GameSoundEvent.GUN_BOUNCE -> synthGunBounce(durationMs = 110)
         GameSoundEvent.TARGET_EXPLOSION -> synthExplosion(durationMs = 520)
+        GameSoundEvent.ARMOR_HIT -> synthArmorHit(durationMs = 140)
+        GameSoundEvent.ARMOR_BREAK -> synthArmorBreak(durationMs = 420)
         GameSoundEvent.LEVEL_WON -> synthArpeggio(
             notesHz = floatArrayOf(523.25f, 659.25f, 783.99f, 1046.50f),
             noteMs = 90,
@@ -383,6 +387,38 @@ class SoundEffectsManager(private val context: Context? = null) {
             phase += 2.0 * PI * freq / sampleRate
             val sample = (sin(phase).toFloat() * exp(-70f * t) * 0.55f).coerceIn(-1f, 1f)
             out[i] = (sample * Short.MAX_VALUE).toInt().toShort()
+        }
+        return out
+    }
+
+    private fun synthArmorHit(durationMs: Int): ShortArray {
+        val count = (sampleRate * durationMs) / 1000
+        val out = ShortArray(count)
+        var p1 = 0.0
+        var p2 = 0.0
+        for (i in 0 until count) {
+            val t = i.toFloat() / sampleRate
+            p1 += 2.0 * PI * 680.0 / sampleRate
+            p2 += 2.0 * PI * 1040.0 / sampleRate
+            val clang = (sin(p1).toFloat() * 0.6f + sin(p2).toFloat() * 0.4f) * exp(-26f * t) * 0.85f
+            out[i] = (clang.coerceIn(-1f, 1f) * Short.MAX_VALUE).toInt().toShort()
+        }
+        return out
+    }
+
+    private fun synthArmorBreak(durationMs: Int): ShortArray {
+        val count = (sampleRate * durationMs) / 1000
+        val out = ShortArray(count)
+        var p1 = 0.0
+        val rng = Random(909)
+        for (i in 0 until count) {
+            val t = i.toFloat() / sampleRate
+            val freq = 920f * exp(-5.0f * t) + 75f
+            p1 += 2.0 * PI * freq / sampleRate
+            val shatter = (rng.nextFloat() * 2f - 1f) * exp(-12f * t) * 0.7f
+            val sub = sin(p1).toFloat() * exp(-8f * t) * 0.85f
+            val mixed = tanh((shatter + sub).toDouble()).toFloat().coerceIn(-1f, 1f)
+            out[i] = (mixed * Short.MAX_VALUE).toInt().toShort()
         }
         return out
     }

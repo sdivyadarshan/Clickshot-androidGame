@@ -30,6 +30,7 @@ enum class AppScreen {
     HOME,
     CAMPAIGN,
     ARENA_GAME,
+    ONLINE_PVP,
     FRIENDS,
     PROFILE
 }
@@ -100,6 +101,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (screen == AppScreen.ARENA_GAME && gameLoopJob == null) {
             startGameLoop()
         }
+    }
+
+    fun openOnlineMultiplayer() {
+        _isGamePaused.value = true
+        _isLevelsMenuOpen.value = false
+        _currentScreen.value = AppScreen.ONLINE_PVP
+        soundManager.play(GameSoundEvent.UI_CLICK)
+    }
+
+    fun closeOnlineMultiplayer() {
+        _currentScreen.value = AppScreen.ARENA_GAME
+        _isGamePaused.value = false
+        _isLevelsMenuOpen.value = false
+        if (gameLoopJob?.isActive != true) {
+            startGameLoop()
+        }
+        soundManager.play(GameSoundEvent.UI_CLICK)
     }
 
     // Start / Initialize Clickshot Physics Arena

@@ -145,8 +145,8 @@ Unlike one-tap insta-kill modes, **a single bullet cannot kill a rival gun**:
     │       │   ├── ArenaGameScreen.kt         # 60 FPS Canvas arena, 2.5x guns, PvP 0/3 HUD, Pause & Levels UI
     │       │   ├── OnlineMultiplayerScreen.kt # Auth gate, Quick Match, Room Code lobby & PvP arena host
     │       │   └── ...                        # Campaign, Home, Lobby, Matchmaking, Friends, Profile screens
-    │       ├── components/                  # Reusable Material 3 UI components
-    │       ├── theme/                       # ColorScheme, Typography & Shapes
+    │       ├── components/                    # Reusable Material 3 UI components
+    │       ├── theme/                         # ColorScheme, Typography & Shapes
     │       └── viewmodel/
     │           ├── GameViewModel.kt           # Solo loop, Pause/Levels state & Room integration
     │           └── MultiplayerViewModel.kt    # Online PvP match lifecycle, pose/shot sync & 3-hit updates

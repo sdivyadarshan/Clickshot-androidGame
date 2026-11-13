@@ -1,0 +1,278 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated player online profile and PvP stats (no PII stored).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Public pilot callsign shown in lobbies and matches."
+        },
+        "avatarIndex": {
+          "type": "integer",
+          "description": "Selected avatar preset index (0-10)."
+        },
+        "onlineWins": {
+          "type": "integer",
+          "description": "Total online PvP victories."
+        },
+        "onlineMatches": {
+          "type": "integer",
+          "description": "Total online PvP matches completed."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp()) when created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp()) when last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "avatarIndex",
+        "onlineWins",
+        "onlineMatches",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PvpRoom": {
+      "title": "PvpRoom",
+      "description": "Real-time internet PvP match room keyed by shareable roomCode.",
+      "type": "object",
+      "properties": {
+        "roomCode": {
+          "type": "string",
+          "description": "Shareable alphanumeric room code matching document ID."
+        },
+        "hostUid": {
+          "type": "string",
+          "description": "UID of the room creator."
+        },
+        "hostName": {
+          "type": "string",
+          "description": "Display name of the host player."
+        },
+        "guestUid": {
+          "type": "string",
+          "description": "UID of the joined opponent player."
+        },
+        "guestName": {
+          "type": "string",
+          "description": "Display name of the joined opponent player."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["waiting", "playing", "finished"],
+          "description": "Current room lifecycle state."
+        },
+        "isPublic": {
+          "type": "boolean",
+          "description": "True if listed for random worldwide Quick Match."
+        },
+        "winnerUid": {
+          "type": "string",
+          "description": "UID of the winner once a gun is eliminated by 3 simultaneous hits."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp()) when room opened."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp()) when room updated."
+        }
+      },
+      "required": [
+        "roomCode",
+        "hostUid",
+        "hostName",
+        "status",
+        "isPublic",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PvpPlayerState": {
+      "title": "PvpPlayerState",
+      "description": "Live normalized 2D physics pose and 3-simultaneous-hit state for a participant gun.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "UID of the player controlling this gun."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Player callsign."
+        },
+        "gunType": {
+          "type": "string",
+          "enum": ["PULSE_PISTOL", "HEAVY_DEAGLE", "SCATTER_SHOTGUN", "VECTOR_SMG", "RAIL_CANNON"],
+          "description": "Active weapon type."
+        },
+        "normX": {
+          "type": "number",
+          "description": "Normalized arena X coordinate."
+        },
+        "normY": {
+          "type": "number",
+          "description": "Normalized arena Y coordinate."
+        },
+        "normVx": {
+          "type": "number",
+          "description": "Normalized horizontal velocity."
+        },
+        "normVy": {
+          "type": "number",
+          "description": "Normalized vertical velocity."
+        },
+        "angle": {
+          "type": "number",
+          "description": "Gun rotation angle in radians."
+        },
+        "angularVelocity": {
+          "type": "number",
+          "description": "Gun angular velocity in rad/s."
+        },
+        "shotsFired": {
+          "type": "integer",
+          "description": "Total shots fired by this gun in the match."
+        },
+        "simultaneousHits": {
+          "type": "integer",
+          "description": "Current simultaneous-burst hit count on this gun (0-3)."
+        },
+        "isEliminated": {
+          "type": "boolean",
+          "description": "True only after receiving 3 simultaneous hits."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp()) on join."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp()) on pose sync."
+        }
+      },
+      "required": [
+        "uid",
+        "displayName",
+        "gunType",
+        "normX",
+        "normY",
+        "normVx",
+        "normVy",
+        "angle",
+        "angularVelocity",
+        "shotsFired",
+        "simultaneousHits",
+        "isEliminated",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PvpShotEvent": {
+      "title": "PvpShotEvent",
+      "description": "Append-only projectile spawn event emitted when a player fires.",
+      "type": "object",
+      "properties": {
+        "shooterUid": {
+          "type": "string",
+          "description": "UID of the shooter."
+        },
+        "participantUids": {
+          "type": "array",
+          "description": "Exactly the two participant UIDs [hostUid, guestUid] for scoped real-time listeners."
+        },
+        "gunType": {
+          "type": "string",
+          "enum": ["PULSE_PISTOL", "HEAVY_DEAGLE", "SCATTER_SHOTGUN", "VECTOR_SMG", "RAIL_CANNON"],
+          "description": "Weapon that fired the shot."
+        },
+        "normX": {
+          "type": "number",
+          "description": "Normalized barrel muzzle X."
+        },
+        "normY": {
+          "type": "number",
+          "description": "Normalized barrel muzzle Y."
+        },
+        "dirAngle": {
+          "type": "number",
+          "description": "Center firing angle in radians."
+        },
+        "pellets": {
+          "type": "integer",
+          "description": "Number of projectiles fired (1 or 3)."
+        },
+        "spreadRadians": {
+          "type": "number",
+          "description": "Angular spread per pellet."
+        },
+        "seq": {
+          "type": "integer",
+          "description": "Monotonic per-shooter sequence number."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp (FieldValue.serverTimestamp()) of the shot."
+        }
+      },
+      "required": [
+        "shooterUid",
+        "participantUids",
+        "gunType",
+        "normX",
+        "normY",
+        "dirAngle",
+        "pellets",
+        "spreadRadians",
+        "seq",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Owner-isolated player profile and online PvP statistics."
+    },
+    "/pvp_rooms/{roomId}": {
+      "schema": {
+        "$ref": "#/entities/PvpRoom"
+      },
+      "description": "Real-time internet PvP match rooms for Quick Match and Room Code play."
+    },
+    "/pvp_rooms/{roomId}/players/{playerUid}": {
+      "schema": {
+        "$ref": "#/entities/PvpPlayerState"
+      },
+      "description": "Per-player live gun physics pose and simultaneous hit counters inside a room."
+    },
+    "/pvp_rooms/{roomId}/shots/{shotId}": {
+      "schema": {
+        "$ref": "#/entities/PvpShotEvent"
+      },
+      "description": "Immutable shot events streamed between room participants."
+    }
+  }
+}

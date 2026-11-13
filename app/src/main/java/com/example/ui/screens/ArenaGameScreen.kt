@@ -101,6 +101,9 @@ fun ArenaGameScreen(
     isLevelsMenuOpen: Boolean = false,
     isSoundEnabled: Boolean = true,
     campaignStages: List<CampaignStage> = emptyList(),
+    isMultiplayerMode: Boolean = false,
+    opponentName: String = "Rival",
+    onOpenMultiplayer: () -> Unit = {},
     onInitArena: (Float, Float) -> Unit = { _, _ -> },
     onInitArenaBounds: (Float, Float, Float, Float) -> Unit = { _, _, _, _ -> },
     onTapScreen: () -> Unit,
@@ -127,7 +130,7 @@ fun ArenaGameScreen(
         return
     }
 
-    BackHandler(enabled = isLevelsMenuOpen || isPaused || engine.gameStatus == GameStatus.PLAYING) {
+    BackHandler(enabled = !isMultiplayerMode && (isLevelsMenuOpen || isPaused || engine.gameStatus == GameStatus.PLAYING)) {
         when {
             isLevelsMenuOpen -> onCloseLevelsMenu()
             isPaused -> onResumeGame()
@@ -223,13 +226,26 @@ fun ArenaGameScreen(
                 drawParticle(particle)
             }
 
-            // 7. Draw Player Gun (Close-up detail)
+            // 7. Draw Opponent Gun & 3-Hit Shield Pips (Multiplayer PvP)
+            if (isMultiplayerMode && !engine.opponentGun.isDestroyed) {
+                drawGunHitAura(engine.opponentGun, isEnemy = true)
+                drawPlayerGun(engine.opponentGun, overrideTint = Color(0xFFFF3366), overrideDarkTint = Color(0xFF9F1239))
+                drawSimultaneousHitPips(engine.opponentGun, isEnemy = true, windowTotal = engine.simultaneousHitWindowSec)
+            }
+
+            // 8. Draw Local Player Gun (Close-up detail)
             if (!engine.playerGun.isDestroyed) {
+                if (isMultiplayerMode) {
+                    drawGunHitAura(engine.playerGun, isEnemy = false)
+                }
                 drawPlayerGun(engine.playerGun)
+                if (isMultiplayerMode) {
+                    drawSimultaneousHitPips(engine.playerGun, isEnemy = false, windowTotal = engine.simultaneousHitWindowSec)
+                }
             }
         }
 
-        // Top Header Bar (Levels Pill, Restart, Sound Toggle, Pause)
+        // Top Header Bar (Levels Pill, Online PvP, Restart, Sound Toggle, Pause)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -237,54 +253,52 @@ fun ArenaGameScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = Color(0xFF151922),
-                border = BorderStroke(1.dp, Color(0xFF334155)),
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable { onOpenLevelsMenu() }
-                    .testTag("levels_menu_button")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.GridView,
-                        contentDescription = "Open Levels Menu",
-                        tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Text(
-                        text = "Level ${engine.levelNumber}",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Black,
-                        color = Color(0xFFF1F5F9),
-                        modifier = Modifier.testTag("level_indicator")
-                    )
-                }
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                IconButton(
-                    onClick = { onRestartLevel() },
+            if (isMultiplayerMode) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFF151922),
+                    border = BorderStroke(1.dp, Color(0xFFEF4444)),
                     modifier = Modifier
                         .minimumInteractiveComponentSize()
-                        .testTag("reset_level_button")
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onExitArena() }
+                        .testTag("exit_pvp_button")
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Restart Level",
-                        tint = Color(0xFFCBD5E1),
-                        modifier = Modifier.size(24.dp)
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Leave PvP Match",
+                            tint = Color(0xFFF87171),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "LEAVE",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFFFCA5A5)
+                        )
+                    }
+                }
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "ONLINE 1v1 • VS ${opponentName.uppercase()}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFF38BDF8)
+                    )
+                    Text(
+                        text = "3 SIMULTANEOUS HITS TO KILL (${engine.playerGun.simultaneousHits}/3 YOU • ${engine.opponentGun.simultaneousHits}/3 RIVAL)",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFBBF24)
                     )
                 }
+
                 IconButton(
                     onClick = { onToggleSound() },
                     modifier = Modifier
@@ -302,18 +316,109 @@ fun ArenaGameScreen(
                         modifier = Modifier.size(24.dp)
                     )
                 }
-                IconButton(
-                    onClick = { if (isPaused) onResumeGame() else onPauseGame() },
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("pause_button")
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = if (isPaused) "Resume Game" else "Pause Game",
-                        tint = Color(0xFFF1F5F9),
-                        modifier = Modifier.size(26.dp)
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFF151922),
+                        border = BorderStroke(1.dp, Color(0xFF334155)),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onOpenLevelsMenu() }
+                            .testTag("levels_menu_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.GridView,
+                                contentDescription = "Open Levels Menu",
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Lvl ${engine.levelNumber}",
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color(0xFFF1F5F9),
+                                modifier = Modifier.testTag("level_indicator")
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFF0F293A),
+                        border = BorderStroke(1.2.dp, Color(0xFF00E5FF)),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onOpenMultiplayer() }
+                            .testTag("open_multiplayer_button")
+                    ) {
+                        Text(
+                            text = "ONLINE PvP",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF67E8F9),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    IconButton(
+                        onClick = { onRestartLevel() },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("reset_level_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Restart Level",
+                            tint = Color(0xFFCBD5E1),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { onToggleSound() },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("sound_toggle_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isSoundEnabled) {
+                                Icons.AutoMirrored.Filled.VolumeUp
+                            } else {
+                                Icons.AutoMirrored.Filled.VolumeOff
+                            },
+                            contentDescription = if (isSoundEnabled) "Mute Sound" else "Enable Sound",
+                            tint = if (isSoundEnabled) Color(0xFF38BDF8) else Color(0xFF64748B),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { if (isPaused) onResumeGame() else onPauseGame() },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("pause_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = if (isPaused) "Resume Game" else "Pause Game",
+                            tint = Color(0xFFF1F5F9),
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
             }
         }
@@ -396,9 +501,9 @@ fun ArenaGameScreen(
             }
         }
 
-        // Level Complete Banner Overlay
+        // Level Complete Banner Overlay (Solo Mode Only)
         AnimatedVisibility(
-            visible = engine.gameStatus == GameStatus.WON,
+            visible = !isMultiplayerMode && engine.gameStatus == GameStatus.WON,
             enter = fadeIn() + scaleIn(initialScale = 0.85f),
             modifier = Modifier.align(Alignment.Center)
         ) {
@@ -502,9 +607,9 @@ fun ArenaGameScreen(
             }
         }
 
-        // Out of Bounds Retry Overlay
+        // Out of Bounds Retry Overlay (Solo Mode Only)
         AnimatedVisibility(
-            visible = engine.gameStatus == GameStatus.LOST,
+            visible = !isMultiplayerMode && engine.gameStatus == GameStatus.LOST,
             enter = fadeIn() + scaleIn(initialScale = 0.85f),
             modifier = Modifier.align(Alignment.Center)
         ) {
@@ -1031,22 +1136,103 @@ private fun DrawScope.drawPlatform(plat: PlatformObstacle) {
     )
 }
 
-private fun DrawScope.drawPlayerGun(gun: GunEntity) {
+private fun DrawScope.drawGunHitAura(gun: GunEntity, isEnemy: Boolean) {
+    val baseRingColor = if (isEnemy) Color(0xFFFF3366) else Color(0xFF00E5FF)
+    drawCircle(
+        color = baseRingColor.copy(alpha = 0.14f),
+        radius = gun.width * 0.56f,
+        center = Offset(gun.x, gun.y)
+    )
+    if (gun.hitFlashTimer > 0f) {
+        drawCircle(
+            color = Color(0xFFFF9100).copy(alpha = (gun.hitFlashTimer / 0.24f).coerceIn(0f, 1f) * 0.55f),
+            radius = gun.width * 0.62f,
+            center = Offset(gun.x, gun.y),
+            style = Stroke(width = 6f)
+        )
+    }
+    if (gun.recoveryFlashTimer > 0f) {
+        drawCircle(
+            color = Color(0xFF10B981).copy(alpha = (gun.recoveryFlashTimer / 0.5f).coerceIn(0f, 1f) * 0.5f),
+            radius = gun.width * 0.60f,
+            center = Offset(gun.x, gun.y),
+            style = Stroke(width = 5f)
+        )
+    }
+}
+
+private fun DrawScope.drawSimultaneousHitPips(
+    gun: GunEntity,
+    isEnemy: Boolean,
+    windowTotal: Float
+) {
+    val pipCount = 3
+    val pipWidth = 22f
+    val pipHeight = 9f
+    val gap = 6f
+    val totalW = pipCount * pipWidth + (pipCount - 1) * gap
+    val startX = gun.x - totalW * 0.5f
+    val y = gun.y - gun.height * 0.66f
+
+    // Background pill
+    drawRoundRect(
+        color = Color(0xCC0F172A),
+        topLeft = Offset(startX - 6f, y - 6f),
+        size = Size(totalW + 12f, pipHeight + if (gun.simultaneousHits in 1..2) 18f else 12f),
+        cornerRadius = CornerRadius(6f, 6f)
+    )
+
+    val activeFill = if (isEnemy) Color(0xFFFF3366) else Color(0xFF38BDF8)
+    for (i in 0 until pipCount) {
+        val lit = i < gun.simultaneousHits
+        drawRoundRect(
+            color = if (lit) activeFill else Color(0xFF334155),
+            topLeft = Offset(startX + i * (pipWidth + gap), y),
+            size = Size(pipWidth, pipHeight),
+            cornerRadius = CornerRadius(3f, 3f)
+        )
+    }
+
+    // Shrinking simultaneous burst timer bar when 1 or 2 hits are active
+    if (gun.simultaneousHits in 1..2 && gun.hitWindowTimer > 0f && windowTotal > 0f) {
+        val ratio = (gun.hitWindowTimer / windowTotal).coerceIn(0f, 1f)
+        drawRoundRect(
+            color = Color(0xFFFBBF24),
+            topLeft = Offset(startX, y + pipHeight + 4f),
+            size = Size(totalW * ratio, 4f),
+            cornerRadius = CornerRadius(2f, 2f)
+        )
+    }
+}
+
+private fun DrawScope.drawPlayerGun(
+    gun: GunEntity,
+    overrideTint: Color? = null,
+    overrideDarkTint: Color? = null
+) {
     val angleDeg = Math.toDegrees(gun.angle.toDouble()).toFloat()
     val blowback = (gun.recoilKickTimer / 0.14f).coerceIn(0f, 1f) * (gun.width * 0.055f)
+    val tintedGun = if (overrideTint != null) {
+        gun.copy(
+            color = overrideTint,
+            darkColor = overrideDarkTint ?: gun.darkColor
+        )
+    } else {
+        gun
+    }
 
-    rotate(degrees = angleDeg, pivot = Offset(gun.x, gun.y)) {
-        val w = gun.width
-        val h = gun.height
-        val left = gun.x - w * 0.5f
-        val top = gun.y - h * 0.5f
+    rotate(degrees = angleDeg, pivot = Offset(tintedGun.x, tintedGun.y)) {
+        val w = tintedGun.width
+        val h = tintedGun.height
+        val left = tintedGun.x - w * 0.5f
+        val top = tintedGun.y - h * 0.5f
 
-        when (gun.gunType) {
-            GunType.PULSE_PISTOL -> drawPistolSilhouette(gun, left, top, w, h, blowback)
-            GunType.HEAVY_DEAGLE -> drawMagnumSilhouette(gun, left, top, w, h, blowback)
-            GunType.SCATTER_SHOTGUN -> drawShotgunSilhouette(gun, left, top, w, h, blowback)
-            GunType.VECTOR_SMG -> drawSmgSilhouette(gun, left, top, w, h, blowback)
-            GunType.RAIL_CANNON -> drawRailgunSilhouette(gun, left, top, w, h, blowback)
+        when (tintedGun.gunType) {
+            GunType.PULSE_PISTOL -> drawPistolSilhouette(tintedGun, left, top, w, h, blowback)
+            GunType.HEAVY_DEAGLE -> drawMagnumSilhouette(tintedGun, left, top, w, h, blowback)
+            GunType.SCATTER_SHOTGUN -> drawShotgunSilhouette(tintedGun, left, top, w, h, blowback)
+            GunType.VECTOR_SMG -> drawSmgSilhouette(tintedGun, left, top, w, h, blowback)
+            GunType.RAIL_CANNON -> drawRailgunSilhouette(tintedGun, left, top, w, h, blowback)
         }
     }
 }
